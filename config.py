@@ -58,5 +58,6 @@ class Config:
     SMTP_PASSWORD: str = os.getenv("SMTP_PASSWORD", "")
     SMTP_FROM_NAME: str = os.getenv("SMTP_FROM_NAME", "Web Hosting Support")
     SMTP_FROM_EMAIL: str = os.getenv("SMTP_FROM_EMAIL", "support@bt.bt")
+    SMTP_CC_EMAIL: str = os.getenv("SMTP_CC_EMAIL", "systems@bt.bt")
 
 settings = Config()

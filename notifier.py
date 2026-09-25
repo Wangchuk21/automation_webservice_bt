@@ -73,6 +73,14 @@ def send_customer_welcome_email(result: ProvisionerResult) -> Tuple[bool, str]:
         msg["From"] = f"{settings.SMTP_FROM_NAME} <{settings.SMTP_FROM_EMAIL}>"
         msg["To"] = result.email
 
+        # Envelope recipients (To + CC)
+        recipients = [result.email]
+        if settings.SMTP_CC_EMAIL:
+            msg["Cc"] = settings.SMTP_CC_EMAIL
+            for cc_addr in [x.strip() for x in settings.SMTP_CC_EMAIL.split(",") if x.strip()]:
+                if cc_addr not in recipients:
+                    recipients.append(cc_addr)
+
         # Attach Plain Text and HTML
         text_part = MIMEText(result.handover_text, "plain", "utf-8")
         msg.attach(text_part)
@@ -107,7 +115,7 @@ def send_customer_welcome_email(result: ProvisionerResult) -> Tuple[bool, str]:
                 server.ehlo()
                 if settings.SMTP_USER and settings.SMTP_PASSWORD:
                     server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
-                server.sendmail(settings.SMTP_FROM_EMAIL, [result.email], msg.as_string())
+                server.sendmail(settings.SMTP_FROM_EMAIL, recipients, msg.as_string())
         else:
             with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=15) as server:
                 server.ehlo()
@@ -118,9 +126,10 @@ def send_customer_welcome_email(result: ProvisionerResult) -> Tuple[bool, str]:
                     pass
                 if settings.SMTP_USER and settings.SMTP_PASSWORD:
                     server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
-                server.sendmail(settings.SMTP_FROM_EMAIL, [result.email], msg.as_string())
+                server.sendmail(settings.SMTP_FROM_EMAIL, recipients, msg.as_string())
 
-        return True, f"Welcome email successfully sent to {result.email}."
+        cc_info = f" (CC: {settings.SMTP_CC_EMAIL})" if settings.SMTP_CC_EMAIL else ""
+        return True, f"Welcome email successfully sent to {result.email}{cc_info}."
     except Exception as e:
         logger.error(f"Failed to send email to {result.email}: {e}")
         return False, f"Failed to send email: {str(e)}"
