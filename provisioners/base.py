@@ -48,124 +48,240 @@ def sanitize_username(domain: str, max_length: int = 8) -> str:
     return cleaned[:max_length]
 
 
-HANDOVER_TEXT_TEMPLATE = """
-================================================================================
-                    WEBSITE HOSTING ACCOUNT CREDENTIALS
-================================================================================
-Dear Customer,
+HANDOVER_TEXT_TEMPLATE = """Dear Customer,
 
-Your shared web hosting account for '{{ domain }}' has been successfully provisioned.
-Below are your access credentials to manage your website and upload your web files.
+We are pleased to inform you that your domain is successfully registered. We have also successfully hosted your website. The credentials for the same are shared below. Please note that the domain and web hosting should be renewed every year from the date of registration. If you wish to discontinue the service, please submit a surrender letter to the Bhutan Telecom office before the next billing date.
 
---------------------------------------------------------------------------------
-1. WEB CONTROL PANEL ACCESS (Browser Web UI)
---------------------------------------------------------------------------------
-Control Panel URL : {{ web_url }}
-Username          : {{ username }}
-Password          : {{ password }}
+Your account has been created with the following details:
 
-Use the Web UI to manage your domains, databases (MySQL), email accounts, 
-SSL certificates, and file manager directly in your browser.
+Username: {{ username }}
+Password: {{ password }}
 
---------------------------------------------------------------------------------
-2. SFTP FILE UPLOAD ACCESS (Secure FTP / FileZilla / WinSCP / Cyberduck)
---------------------------------------------------------------------------------
-Protocol          : SFTP (SSH File Transfer Protocol)
-SFTP Host/Server  : {{ sftp_host }}
-SFTP Port         : {{ sftp_port }}
-Username          : {{ username }}
-Password          : {{ password }}
-Web Document Root : {{ doc_root }}
+URL: {{ web_url if web_url.endswith('/') else web_url + '/' }}
+If you wish to use FTP, please use the following:
 
-* Upload your website files (HTML, PHP, assets) into the '{{ doc_root }}' directory.
-* Files placed outside this directory will not be visible on the web.
+Host: sftp://{{ domain }}/
+Port: {{ sftp_port }}
 
---------------------------------------------------------------------------------
-3. DOMAIN STATUS
---------------------------------------------------------------------------------
-Domain Name       : {{ domain }}
-DNS Management    : Managed by Technical Support (No customer action required).
-Routing Status    : Active and connected to your hosting root directory.
+Important Maintenance Notice:
 
---------------------------------------------------------------------------------
-Need help or support?
-Contact: support@druknet.bt
-================================================================================
+To ensure the ongoing security and stability of your website, we strongly recommend that you:
+
+Keep your website software updated. This includes the core application (e.g., WordPress, Joomla), all themes, and all plugins/extensions. Running outdated software is the most common cause of security breaches and service disruptions.
+
+Perform regular backups. We advise you to regularly back up your website files and database. This ensures you can quickly restore your site in case of any unforeseen issues.
+
+Use strong, unique credentials. Please use the strong password provided and update it periodically. Avoid using the same password for your hosting account, CMS admin panel, and FTP/SFTP access.
+
+Neglecting these practices may expose your site to security vulnerabilities, malware, and unexpected downtime. Please be advised that, in accordance with our Acceptable Use Policy and to protect our infrastructure and other customers, we reserve the right to suspend hosting services or remove compromised website content if a severe security breach is detected that poses an active threat.
+
+
+Thank you for choosing our service to meet your web hosting needs. Please don't hesitate to contact us at systems@bt.bt if you have any questions.
+
+Regards,
+Bhutan Telecom Ltd.
 """
 
 
-HANDOVER_HTML_TEMPLATE = """
-<!DOCTYPE html>
+HANDOVER_HTML_TEMPLATE = """<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.6; color: #2d3748; background-color: #f7fafc; padding: 20px; }
-    .card { max-width: 650px; margin: 0 auto; background: #ffffff; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); overflow: hidden; border: 1px solid #e2e8f0; }
-    .header { background: linear-gradient(135deg, #1e3a8a, #2563eb); color: white; padding: 24px; text-align: center; }
-    .header h2 { margin: 0; font-size: 24px; font-weight: 700; }
-    .header p { margin: 6px 0 0; opacity: 0.9; font-size: 14px; }
-    .content { padding: 28px; }
-    .section { margin-bottom: 24px; }
-    .section-title { font-size: 15px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: #4b5563; margin-bottom: 12px; border-bottom: 2px solid #edf2f7; padding-bottom: 6px; }
-    .grid { display: grid; grid-template-columns: 140px 1fr; gap: 8px 12px; font-size: 14px; }
-    .label { font-weight: 600; color: #64748b; }
-    .value { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: #0f172a; word-break: break-all; }
-    .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; background: #e0f2fe; color: #0369a1; font-weight: 600; font-size: 12px; }
-    .highlight { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px; }
-    .footer { background: #f8fafc; padding: 16px; text-align: center; font-size: 12px; color: #64748b; border-top: 1px solid #e2e8f0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      line-height: 1.65;
+      color: #334155;
+      background-color: #f1f5f9;
+      margin: 0;
+      padding: 24px 12px;
+    }
+    .email-container {
+      max-width: 640px;
+      margin: 0 auto;
+      background: #ffffff;
+      border-radius: 10px;
+      overflow: hidden;
+      border: 1px solid #e2e8f0;
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.05);
+    }
+    .header {
+      background: linear-gradient(135deg, #0f4c81 0%, #1e3a8a 100%);
+      color: #ffffff;
+      padding: 28px 24px;
+      text-align: center;
+    }
+    .header h1 {
+      margin: 0;
+      font-size: 22px;
+      font-weight: 700;
+      letter-spacing: -0.3px;
+    }
+    .header p {
+      margin: 6px 0 0;
+      font-size: 14px;
+      opacity: 0.9;
+    }
+    .content {
+      padding: 28px 24px;
+    }
+    p {
+      margin: 0 0 16px;
+      font-size: 14px;
+      color: #334155;
+    }
+    .credentials-box {
+      background: #f8fafc;
+      border: 1px solid #cbd5e1;
+      border-left: 4px solid #0f4c81;
+      border-radius: 6px;
+      padding: 18px 20px;
+      margin: 20px 0;
+    }
+    .cred-row {
+      display: flex;
+      margin-bottom: 10px;
+      font-size: 14px;
+    }
+    .cred-row:last-child {
+      margin-bottom: 0;
+    }
+    .cred-label {
+      width: 110px;
+      font-weight: 600;
+      color: #475569;
+      flex-shrink: 0;
+    }
+    .cred-value {
+      color: #0f172a;
+      word-break: break-all;
+    }
+    .cred-value code {
+      background: #e2e8f0;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 13px;
+      font-weight: 600;
+      color: #0f172a;
+    }
+    .cred-value a {
+      color: #0284c7;
+      text-decoration: none;
+      font-weight: 600;
+    }
+    .cred-value a:hover {
+      text-decoration: underline;
+    }
+    .section-subtitle {
+      font-weight: 600;
+      font-size: 14px;
+      color: #0f172a;
+      margin: 16px 0 10px;
+    }
+    .notice-box {
+      background: #fffbeb;
+      border: 1px solid #fef3c7;
+      border-left: 4px solid #f59e0b;
+      border-radius: 6px;
+      padding: 16px 18px;
+      margin: 24px 0;
+    }
+    .notice-title {
+      font-weight: 700;
+      font-size: 14px;
+      color: #92400e;
+      margin-bottom: 8px;
+    }
+    .notice-box p, .notice-box li {
+      font-size: 13px;
+      color: #78350f;
+      line-height: 1.55;
+    }
+    .notice-box ul {
+      margin: 8px 0 12px 18px;
+      padding: 0;
+    }
+    .notice-box li {
+      margin-bottom: 6px;
+    }
+    .notice-disclaimer {
+      font-size: 12px;
+      color: #92400e;
+      margin-top: 10px;
+      line-height: 1.5;
+    }
+    .footer {
+      background: #f8fafc;
+      border-top: 1px solid #e2e8f0;
+      padding: 18px 24px;
+      font-size: 13px;
+      color: #64748b;
+    }
+    .footer strong {
+      color: #1e293b;
+    }
   </style>
 </head>
 <body>
-  <div class="card">
+  <div class="email-container">
     <div class="header">
-      <h2>Web Hosting Provisioned</h2>
-      <p>Domain: <strong>{{ domain }}</strong> ({{ panel|upper }})</p>
+      <h1>Domain Registration & Web Hosting</h1>
+      <p>Domain: <strong>{{ domain }}</strong></p>
     </div>
     <div class="content">
-      <div class="section">
-        <div class="section-title">1. Web UI Control Panel</div>
-        <div class="highlight grid">
-          <div class="label">Panel URL:</div>
-          <div class="value"><a href="{{ web_url }}" target="_blank" style="color: #2563eb; text-decoration: none;">{{ web_url }}</a></div>
-          <div class="label">Username:</div>
-          <div class="value"><strong>{{ username }}</strong></div>
-          <div class="label">Password:</div>
-          <div class="value"><code>{{ password }}</code></div>
+      <p>Dear Customer,</p>
+      
+      <p>We are pleased to inform you that your domain is successfully registered. We have also successfully hosted your website. The credentials for the same are shared below. Please note that the domain and web hosting should be renewed every year from the date of registration. If you wish to discontinue the service, please submit a surrender letter to the Bhutan Telecom office before the next billing date.</p>
+
+      <p><strong>Your account has been created with the following details:</strong></p>
+
+      <div class="credentials-box">
+        <div class="cred-row">
+          <div class="cred-label">Username:</div>
+          <div class="cred-value"><strong>{{ username }}</strong></div>
+        </div>
+        <div class="cred-row">
+          <div class="cred-label">Password:</div>
+          <div class="cred-value"><code>{{ password }}</code></div>
+        </div>
+        <div class="cred-row" style="margin-top: 12px;">
+          <div class="cred-label">URL:</div>
+          <div class="cred-value"><a href="{{ web_url if web_url.endswith('/') else web_url + '/' }}" target="_blank">{{ web_url if web_url.endswith('/') else web_url + '/' }}</a></div>
+        </div>
+
+        <div class="section-subtitle">If you wish to use FTP, please use the following:</div>
+        
+        <div class="cred-row">
+          <div class="cred-label">Host:</div>
+          <div class="cred-value"><code>sftp://{{ domain }}/</code></div>
+        </div>
+        <div class="cred-row">
+          <div class="cred-label">Port:</div>
+          <div class="cred-value"><code>{{ sftp_port }}</code></div>
         </div>
       </div>
 
-      <div class="section">
-        <div class="section-title">2. SFTP Upload Access</div>
-        <div class="highlight grid">
-          <div class="label">Protocol:</div>
-          <div class="value"><span class="badge">SFTP (SSH File Transfer)</span></div>
-          <div class="label">Server Host:</div>
-          <div class="value">{{ sftp_host }}</div>
-          <div class="label">Port:</div>
-          <div class="value">{{ sftp_port }}</div>
-          <div class="label">Username:</div>
-          <div class="value">{{ username }}</div>
-          <div class="label">Password:</div>
-          <div class="value"><code>{{ password }}</code></div>
-          <div class="label">Doc Root:</div>
-          <div class="value"><strong>{{ doc_root }}</strong></div>
+      <div class="notice-box">
+        <div class="notice-title">Important Maintenance Notice:</div>
+        <p>To ensure the ongoing security and stability of your website, we strongly recommend that you:</p>
+        <ul>
+          <li><strong>Keep your website software updated.</strong> This includes the core application (e.g., WordPress, Joomla), all themes, and all plugins/extensions. Running outdated software is the most common cause of security breaches and service disruptions.</li>
+          <li><strong>Perform regular backups.</strong> We advise you to regularly back up your website files and database. This ensures you can quickly restore your site in case of any unforeseen issues.</li>
+          <li><strong>Use strong, unique credentials.</strong> Please use the strong password provided and update it periodically. Avoid using the same password for your hosting account, CMS admin panel, and FTP/SFTP access.</li>
+        </ul>
+        <div class="notice-disclaimer">
+          Neglecting these practices may expose your site to security vulnerabilities, malware, and unexpected downtime. Please be advised that, in accordance with our Acceptable Use Policy and to protect our infrastructure and other customers, we reserve the right to suspend hosting services or remove compromised website content if a severe security breach is detected that poses an active threat.
         </div>
-        <p style="font-size: 13px; color: #64748b; margin-top: 8px;">Upload all public HTML, PHP, and asset files into the <strong>{{ doc_root }}</strong> directory.</p>
       </div>
 
-      <div class="section">
-        <div class="section-title">3. Domain & DNS Status</div>
-        <div class="highlight grid">
-          <div class="label">Domain:</div>
-          <div class="value"><strong>{{ domain }}</strong></div>
-          <div class="label">DNS Routing:</div>
-          <div class="value"><span class="badge" style="background: #ecfdf5; color: #047857;">Managed by Technical Support</span></div>
-        </div>
-      </div>
+      <p>Thank you for choosing our service to meet your web hosting needs. Please don't hesitate to contact us at <a href="mailto:systems@bt.bt" style="color: #0284c7; text-decoration: none;">systems@bt.bt</a> if you have any questions.</p>
     </div>
+
     <div class="footer">
-      Shared Web Hosting Automation &bull; Delivered for {{ domain }}
+      Regards,<br>
+      <strong>Bhutan Telecom Ltd.</strong>
     </div>
   </div>
 </body>
