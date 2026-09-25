@@ -14,6 +14,7 @@ from provisioners.cpanel import CPanelProvisioner
 from provisioners.directadmin import DirectAdminProvisioner
 from provisioners.base import generate_secure_password, sanitize_username
 from notifier import send_customer_welcome_email, test_smtp_connection
+from nic_client import NICClient
 
 app = FastAPI(
     title="Automation WebService BT",
@@ -72,6 +73,10 @@ class AccountCreateRequest(BaseModel):
     email: Optional[str] = Field(None, description="Customer notification email")
     package: Optional[str] = Field(None, description="Hosting package/plan")
     send_email: bool = Field(False, description="Send credentials directly to customer email via SMTP")
+    register_nic: bool = Field(False, description="Register or update domain on nic.bt.bt")
+    customer_name: Optional[str] = Field(None, description="Customer or organization name for nic.bt.bt")
+    phone: Optional[str] = Field(None, description="Customer telephone for nic.bt.bt")
+    address: Optional[str] = Field(None, description="Customer address for nic.bt.bt")
     dry_run: bool = Field(False, description="Simulate account creation without modifying remote server")
 
 
@@ -179,6 +184,18 @@ async def create_account(payload: AccountCreateRequest):
         sent, err = send_customer_welcome_email(result)
         email_status = {"sent": sent, "message": err}
 
+    nic_status = None
+    if payload.register_nic and not payload.dry_run:
+        nic = NICClient()
+        nic_res = nic.register_or_update_domain(
+            domain=result.domain,
+            customer_name=payload.customer_name or result.username,
+            email=payload.email or settings.SMTP_FROM_EMAIL,
+            phone=payload.phone or "+975",
+            address=payload.address or "Thimphu, Bhutan"
+        )
+        nic_status = nic_res
+
     return {
         "success": True,
         "message": result.message,
@@ -194,6 +211,37 @@ async def create_account(payload: AccountCreateRequest):
             "doc_root": result.doc_root,
             "nameservers": result.nameservers,
             "handover_text": result.handover_text,
-            "email_status": email_status
+            "email_status": email_status,
+            "nic_status": nic_status
         }
     }
+
+
+@app.post("/api/v1/nic/test")
+async def test_nic_portal():
+    """Test login & access to nic.bt.bt registry portal."""
+    nic = NICClient()
+    ok, msg = nic.login()
+    return {"success": ok, "message": msg, "portal_url": settings.NIC_URL}
+
+
+class DomainRegisterRequest(BaseModel):
+    domain: str
+    customer_name: str
+    email: str
+    phone: Optional[str] = "+975"
+    address: Optional[str] = "Thimphu, Bhutan"
+
+
+@app.post("/api/v1/nic/register")
+async def register_nic_domain(payload: DomainRegisterRequest):
+    """Directly register or update a domain on nic.bt.bt."""
+    nic = NICClient()
+    res = nic.register_or_update_domain(
+        domain=payload.domain,
+        customer_name=payload.customer_name,
+        email=payload.email,
+        phone=payload.phone or "+975",
+        address=payload.address or "Thimphu, Bhutan"
+    )
+    return res

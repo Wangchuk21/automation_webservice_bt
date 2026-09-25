@@ -60,4 +60,10 @@ class Config:
     SMTP_FROM_EMAIL: str = os.getenv("SMTP_FROM_EMAIL", "support@bt.bt")
     SMTP_CC_EMAIL: str = os.getenv("SMTP_CC_EMAIL", "systems@bt.bt")
 
+    # NIC / WHOIS Registry (nic.bt.bt)
+    NIC_ENABLED: bool = os.getenv("NIC_ENABLED", "true").lower() in ("true", "1", "yes")
+    NIC_URL: str = os.getenv("NIC_URL", "https://nic.bt.bt")
+    NIC_USER: str = os.getenv("NIC_USER", "admin@bt.bt")
+    NIC_PASSWORD: str = os.getenv("NIC_PASSWORD", "")
+
 settings = Config()
