@@ -89,7 +89,7 @@ Routing Status    : Active and connected to your hosting root directory.
 
 --------------------------------------------------------------------------------
 Need help or support?
-Contact: support@yourdomain.bt
+Contact: support@druknet.bt
 ================================================================================
 """
 

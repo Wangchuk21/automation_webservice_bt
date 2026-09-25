@@ -44,6 +44,12 @@ class CPanelProvisioner(BaseProvisioner):
         self.whm_password = whm_password
         self.whm_user = whm_user
         self.web_url = web_url or f"https://{host}:2083"
+        # Port extracted so each customer gets their own domain-based login URL
+        try:
+            from urllib.parse import urlparse as _uparse
+            self.web_port = _uparse(self.web_url).port or 2083
+        except Exception:
+            self.web_port = 2083
         self.sftp_port = sftp_port
         self.default_plan = default_plan
         self.nameservers = nameservers
@@ -114,6 +120,8 @@ class CPanelProvisioner(BaseProvisioner):
         password = password or generate_secure_password(16)
         email = email.strip() if email else f"admin@{domain}"
         plan = package or self.default_plan
+        # Customer's own domain is the login URL host, not the server hostname
+        customer_web_url = f"https://{domain}:{self.web_port}"
 
         if dry_run:
             handover_text = self.format_handover(
@@ -121,7 +129,7 @@ class CPanelProvisioner(BaseProvisioner):
                 domain=domain,
                 username=username,
                 password=password,
-                web_url=self.web_url,
+                web_url=customer_web_url,
                 sftp_host=self.host,
                 sftp_port=self.sftp_port,
                 doc_root="public_html/",
@@ -134,7 +142,7 @@ class CPanelProvisioner(BaseProvisioner):
                 username=username,
                 password=password,
                 email=email,
-                web_url=self.web_url,
+                web_url=customer_web_url,
                 sftp_host=self.host,
                 sftp_port=self.sftp_port,
                 doc_root="public_html/",
@@ -146,13 +154,13 @@ class CPanelProvisioner(BaseProvisioner):
 
         # Attempt Method 1: WHM REST API if token exists
         if self.whm_api_token:
-            result = self._create_via_api(domain, username, password, email, plan, quota_mb)
+            result = self._create_via_api(domain, username, password, email, plan, quota_mb, customer_web_url)
             if result.success:
                 return result
             logger.warning(f"WHM API account creation failed ({result.message}). Trying SSH fallback...")
 
         # Method 2: SSH execution (whmapi1 or /scripts/createacct)
-        return self._create_via_ssh(domain, username, password, email, plan, quota_mb)
+        return self._create_via_ssh(domain, username, password, email, plan, quota_mb, customer_web_url)
 
     def _create_via_ssh(
         self,
@@ -161,7 +169,8 @@ class CPanelProvisioner(BaseProvisioner):
         password: str,
         email: str,
         plan: str,
-        quota_mb: Optional[int]
+        quota_mb: Optional[int],
+        customer_web_url: str = ""
     ) -> ProvisionerResult:
         # Escape single quotes in password for bash
         escaped_password = password.replace("'", "'\\''")
@@ -202,7 +211,7 @@ class CPanelProvisioner(BaseProvisioner):
                             domain=domain,
                             username=username,
                             password=password,
-                            web_url=self.web_url,
+                            web_url=customer_web_url,
                             sftp_host=self.host,
                             sftp_port=self.sftp_port,
                             doc_root="public_html/",
@@ -215,7 +224,7 @@ class CPanelProvisioner(BaseProvisioner):
                             username=username,
                             password=password,
                             email=email,
-                            web_url=self.web_url,
+                            web_url=customer_web_url,
                             sftp_host=self.host,
                             sftp_port=self.sftp_port,
                             doc_root="public_html/",
@@ -249,7 +258,7 @@ class CPanelProvisioner(BaseProvisioner):
                     domain=domain,
                     username=username,
                     password=password,
-                    web_url=self.web_url,
+                    web_url=customer_web_url,
                     sftp_host=self.host,
                     sftp_port=self.sftp_port,
                     doc_root="public_html/",
@@ -262,7 +271,7 @@ class CPanelProvisioner(BaseProvisioner):
                     username=username,
                     password=password,
                     email=email,
-                    web_url=self.web_url,
+                    web_url=customer_web_url,
                     sftp_host=self.host,
                     sftp_port=self.sftp_port,
                     doc_root="public_html/",
@@ -289,7 +298,8 @@ class CPanelProvisioner(BaseProvisioner):
         password: str,
         email: str,
         plan: str,
-        quota_mb: Optional[int]
+        quota_mb: Optional[int],
+        customer_web_url: str = ""
     ) -> ProvisionerResult:
         url = f"https://{self.host}:2087/json-api/createacct?api.version=1"
         headers = {}
@@ -320,7 +330,7 @@ class CPanelProvisioner(BaseProvisioner):
                     domain=domain,
                     username=username,
                     password=password,
-                    web_url=self.web_url,
+                    web_url=customer_web_url,
                     sftp_host=self.host,
                     sftp_port=self.sftp_port,
                     doc_root="public_html/",
@@ -333,7 +343,7 @@ class CPanelProvisioner(BaseProvisioner):
                     username=username,
                     password=password,
                     email=email,
-                    web_url=self.web_url,
+                    web_url=customer_web_url,
                     sftp_host=self.host,
                     sftp_port=self.sftp_port,
                     doc_root="public_html/",

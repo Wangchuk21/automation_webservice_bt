@@ -42,6 +42,12 @@ class DirectAdminProvisioner(BaseProvisioner):
         self.api_user = api_user
         self.api_password = api_password
         self.web_url = web_url or f"https://{host}:2222"
+        # Port extracted so each customer gets their own domain-based login URL
+        try:
+            from urllib.parse import urlparse as _uparse
+            self.web_port = _uparse(self.web_url).port or 2222
+        except Exception:
+            self.web_port = 2222
         self.sftp_port = sftp_port
         self.default_package = default_package
         self.nameservers = nameservers
@@ -88,6 +94,8 @@ class DirectAdminProvisioner(BaseProvisioner):
         email = email.strip() if email else f"admin@{domain}"
         pkg = package or self.default_package
         doc_root = f"domains/{domain}/public_html/"
+        # Customer's own domain is the login URL host, not the server hostname
+        customer_web_url = f"https://{domain}:{self.web_port}"
 
         if dry_run:
             handover_text = self.format_handover(
@@ -95,7 +103,7 @@ class DirectAdminProvisioner(BaseProvisioner):
                 domain=domain,
                 username=username,
                 password=password,
-                web_url=self.web_url,
+                web_url=customer_web_url,
                 sftp_host=self.host,
                 sftp_port=self.sftp_port,
                 doc_root=doc_root,
@@ -108,7 +116,7 @@ class DirectAdminProvisioner(BaseProvisioner):
                 username=username,
                 password=password,
                 email=email,
-                web_url=self.web_url,
+                web_url=customer_web_url,
                 sftp_host=self.host,
                 sftp_port=self.sftp_port,
                 doc_root=doc_root,
@@ -120,13 +128,13 @@ class DirectAdminProvisioner(BaseProvisioner):
 
         # Method 1: DirectAdmin API (CMD_API_ACCOUNT_USER)
         if self.api_password:
-            result = self._create_via_api(domain, username, password, email, pkg, doc_root)
+            result = self._create_via_api(domain, username, password, email, pkg, doc_root, customer_web_url)
             if result.success:
                 return result
             logger.warning(f"DirectAdmin API failed: {result.message}. Trying SSH fallback...")
 
         # Method 2: SSH execution
-        return self._create_via_ssh(domain, username, password, email, pkg, doc_root)
+        return self._create_via_ssh(domain, username, password, email, pkg, doc_root, customer_web_url)
 
     def _create_via_api(
         self,
@@ -135,7 +143,8 @@ class DirectAdminProvisioner(BaseProvisioner):
         password: str,
         email: str,
         pkg: str,
-        doc_root: str
+        doc_root: str,
+        customer_web_url: str = ""
     ) -> ProvisionerResult:
         url = f"https://{self.host}:2222/CMD_API_ACCOUNT_USER"
         auth = (self.api_user, self.api_password)
@@ -166,7 +175,7 @@ class DirectAdminProvisioner(BaseProvisioner):
                     domain=domain,
                     username=username,
                     password=password,
-                    web_url=self.web_url,
+                    web_url=customer_web_url,
                     sftp_host=self.host,
                     sftp_port=self.sftp_port,
                     doc_root=doc_root,
@@ -179,7 +188,7 @@ class DirectAdminProvisioner(BaseProvisioner):
                     username=username,
                     password=password,
                     email=email,
-                    web_url=self.web_url,
+                    web_url=customer_web_url,
                     sftp_host=self.host,
                     sftp_port=self.sftp_port,
                     doc_root=doc_root,
@@ -201,7 +210,23 @@ class DirectAdminProvisioner(BaseProvisioner):
             )
 
     def list_packages(self) -> list:
-        """Fetch available packages on the DirectAdmin server."""
+        """Fetch available packages on the DirectAdmin server via API (preferred) or SSH fallback."""
+        # Prefer API method — faster, no sudo escalation needed
+        if self.api_password:
+            try:
+                url = f"https://{self.host}:2222/CMD_API_PACKAGES_USER"
+                auth = (self.api_user, self.api_password)
+                resp = requests.get(url, auth=auth, verify=False, timeout=10)
+                if resp.status_code == 200:
+                    import urllib.parse as _up
+                    parsed = _up.parse_qs(resp.text)
+                    pkgs = parsed.get("list[]", [])
+                    if pkgs:
+                        return sorted(list(set(pkgs)))
+            except Exception as e:
+                logger.warning(f"DA API package list failed, trying SSH fallback: {e}")
+
+        # SSH fallback
         cmd = "ls -1 /usr/local/directadmin/data/users/admin/packages/ 2>/dev/null | sed 's/\\.pkg$//'"
         if self.ssh_user != "root":
             if self.ssh_password:
@@ -222,7 +247,8 @@ class DirectAdminProvisioner(BaseProvisioner):
         password: str,
         email: str,
         pkg: str,
-        doc_root: str
+        doc_root: str,
+        customer_web_url: str = ""
     ) -> ProvisionerResult:
         escaped_password = password.replace("'", "'\\''")
         escaped_user = username.replace("'", "'\\''")
@@ -267,7 +293,7 @@ class DirectAdminProvisioner(BaseProvisioner):
                     domain=domain,
                     username=username,
                     password=password,
-                    web_url=self.web_url,
+                    web_url=customer_web_url,
                     sftp_host=self.host,
                     sftp_port=self.sftp_port,
                     doc_root=doc_root,
@@ -280,7 +306,7 @@ class DirectAdminProvisioner(BaseProvisioner):
                     username=username,
                     password=password,
                     email=email,
-                    web_url=self.web_url,
+                    web_url=customer_web_url,
                     sftp_host=self.host,
                     sftp_port=self.sftp_port,
                     doc_root=doc_root,
