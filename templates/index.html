@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hosting Provisioning Automation | cPanel & DirectAdmin</title>
+  <meta name="description" content="Automated user account provisioning and customer SFTP & Web UI onboarding for cPanel and DirectAdmin.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body class="dark-theme">
+  <!-- Background Glow & Grid -->
+  <div class="ambient-glow glow-1"></div>
+  <div class="ambient-glow glow-2"></div>
+  <div class="ambient-glow glow-3"></div>
+  <div class="bg-grid-pattern"></div>
+
+  <!-- Toast Notification Container -->
+  <div id="toast-container" class="toast-container"></div>
+
+  <div class="app-wrapper">
+    <!-- Header -->
+    <header class="navbar">
+      <div class="nav-brand">
+        <div class="brand-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect>
+            <rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect>
+            <line x1="6" y1="6" x2="6.01" y2="6"></line>
+            <line x1="6" y1="18" x2="6.01" y2="18"></line>
+          </svg>
+        </div>
+        <div>
+          <h1 class="brand-title">Hosting Provisioner <span class="brand-badge">BT Service</span></h1>
+          <p class="brand-subtitle">cPanel & DirectAdmin Automated Customer Onboarding</p>
+        </div>
+      </div>
+      <div class="nav-actions">
+        <button id="btn-check-servers" class="btn btn-secondary btn-sm" onclick="checkServerHealth()">
+          <span class="indicator-dot loading" id="overall-status-dot"></span>
+          <span id="overall-status-text">Check Server Health</span>
+        </button>
+        <a href="#quick-docs" class="btn btn-ghost btn-sm">Docs</a>
+      </div>
+    </header>
+
+    <!-- Main Grid -->
+    <main class="dashboard-grid">
+      <!-- Left Column: Provisioning Form -->
+      <section class="card form-card">
+        <div class="card-header">
+          <div class="card-icon">⚡</div>
+          <div>
+            <h2 class="card-title">Provision New Hosting Account</h2>
+            <p class="card-subtitle">Creates account on remote server & configures Web UI + SFTP</p>
+          </div>
+        </div>
+
+        <form id="provision-form" onsubmit="handleProvisionSubmit(event)">
+          <!-- Panel Selector -->
+          <div class="form-group">
+            <label class="form-label">Target Control Panel <span class="required">*</span></label>
+            <div class="panel-toggle-grid">
+              <label class="panel-option">
+                <input type="radio" name="panel" value="cpanel" checked onchange="updatePanelContext()">
+                <div class="panel-card">
+                  <div class="panel-logo cpanel-glow">cPanel</div>
+                  <div class="panel-info">
+                    <span class="panel-name">cPanel / WHM</span>
+                    <span class="panel-meta" id="cpanel-meta-host">{{ cpanel_host }}</span>
+                  </div>
+                  <div class="status-chip" id="cpanel-badge">SSH / API</div>
+                </div>
+              </label>
+
+              <label class="panel-option">
+                <input type="radio" name="panel" value="directadmin" onchange="updatePanelContext()">
+                <div class="panel-card">
+                  <div class="panel-logo da-glow">DA</div>
+                  <div class="panel-info">
+                    <span class="panel-name">DirectAdmin</span>
+                    <span class="panel-meta" id="da-meta-host">{{ da_host }}</span>
+                  </div>
+                  <div class="status-chip" id="da-badge">SSH / API</div>
+                </div>
+              </label>
+            </div>
+          </div>
+
+          <!-- Customer Domain -->
+          <div class="form-group">
+            <label for="domain" class="form-label">Customer Domain Name <span class="required">*</span></label>
+            <div class="input-with-icon">
+              <span class="input-icon">🌐</span>
+              <input type="text" id="domain" name="domain" placeholder="e.g. clientdomain.bt" required 
+                     oninput="onDomainChanged(this.value)">
+            </div>
+            <span class="form-hint">The primary domain for this hosting account.</span>
+          </div>
+
+          <!-- Username & Password Row -->
+          <div class="form-row">
+            <div class="form-group">
+              <label for="username" class="form-label">Customer Username</label>
+              <div class="input-with-icon">
+                <span class="input-icon">👤</span>
+                <input type="text" id="username" name="username" placeholder="Auto-generated" maxlength="16">
+              </div>
+              <span class="form-hint">Linux/cPanel user. Auto-generated if left empty.</span>
+            </div>
+
+            <div class="form-group">
+              <div class="label-with-action">
+                <label for="password" class="form-label">Customer Password</label>
+                <button type="button" class="btn-text-action" onclick="generateNewPassword()">Auto Generate</button>
+              </div>
+              <div class="input-with-icon">
+                <span class="input-icon">🔑</span>
+                <input type="text" id="password" name="password" placeholder="High entropy password">
+              </div>
+              <span class="form-hint">Used for both Web UI login and SFTP file uploads.</span>
+            </div>
+          </div>
+
+          <!-- Customer Email -->
+          <div class="form-row">
+            <div class="form-group">
+              <label for="email" class="form-label">Customer Email</label>
+              <div class="input-with-icon">
+                <span class="input-icon">✉️</span>
+                <input type="email" id="email" name="email" placeholder="client@domain.bt">
+              </div>
+              <span class="form-hint">Used for notifications and welcome letter.</span>
+            </div>
+
+            <div class="form-group">
+              <label for="package" class="form-label">Hosting Package / Plan</label>
+              <div class="input-with-icon">
+                <span class="input-icon">📦</span>
+                <select id="package" name="package" class="custom-select">
+                  <option value="Bronze">Bronze</option>
+                  <option value="Silver">Silver</option>
+                  <option value="Gold">Gold</option>
+                  <option value="Platinum">Platinum</option>
+                  <option value="default" selected>default</option>
+                </select>
+              </div>
+              <span class="form-hint">Live packages from your cPanel server.</span>
+            </div>
+          </div>
+
+          <div class="form-checkbox-row">
+            <label class="custom-checkbox">
+              <input type="checkbox" id="dry_run" name="dry_run">
+              <span class="checkmark"></span>
+              <span class="checkbox-label"><strong style="color: #fbbf24;">Dry-Run Simulation:</strong> Preview credentials & handover without executing on server</span>
+            </label>
+          </div>
+
+          <!-- Send Welcome Email Checkbox -->
+          {% if smtp_enabled %}
+          <div class="form-checkbox-row">
+            <label class="custom-checkbox">
+              <input type="checkbox" id="send_email" name="send_email">
+              <span class="checkmark"></span>
+              <span class="checkbox-label">Send welcome email to customer automatically via SMTP</span>
+            </label>
+          </div>
+          {% endif %}
+
+          <!-- Action Buttons -->
+          <div class="form-actions">
+            <button type="submit" id="btn-submit" class="btn btn-primary btn-block">
+              <span class="btn-icon">🚀</span>
+              <span id="btn-submit-text">Provision Hosting Account</span>
+            </button>
+          </div>
+        </form>
+      </section>
+
+      <!-- Right Column: Result / Customer Handover Kit -->
+      <section class="card result-card">
+        <div class="card-header">
+          <div class="card-icon">📋</div>
+          <div>
+            <h2 class="card-title">Customer Handover Kit</h2>
+            <p class="card-subtitle">Ready-to-send credentials for Web UI and SFTP upload</p>
+          </div>
+        </div>
+
+        <div id="result-empty-state" class="empty-state">
+          <div class="empty-icon">📂</div>
+          <h3 class="empty-title">No Account Provisioned Yet</h3>
+          <p class="empty-desc">Fill in the customer domain on the left and click <strong>Provision Hosting Account</strong>. The credentials, SFTP upload details, and email copy will appear here instantly.</p>
+          
+          <div class="quick-status-box">
+            <div class="quick-status-item">
+              <span class="qs-label">cPanel Target:</span>
+              <span class="qs-val" id="qs-cpanel">{{ cpanel_host }}</span>
+            </div>
+            <div class="quick-status-item">
+              <span class="qs-label">DirectAdmin Target:</span>
+              <span class="qs-val" id="qs-da">{{ da_host }}</span>
+            </div>
+          </div>
+        </div>
+
+        <div id="result-loading-state" class="loading-state hidden">
+          <div class="spinner"></div>
+          <h3 class="loading-title">Connecting to Remote Server...</h3>
+          <p class="loading-desc" id="loading-desc-text">Executing account creation commands over SSH / API. Please wait.</p>
+        </div>
+
+        <!-- Result Container -->
+        <div id="result-content" class="result-content hidden">
+          <div class="success-banner">
+            <div class="success-icon">✓</div>
+            <div>
+              <h4 class="success-title">Account Created Successfully!</h4>
+              <p class="success-subtitle" id="res-success-meta"></p>
+            </div>
+          </div>
+
+          <!-- Customer Handover Detail Grid -->
+          <div class="details-section">
+            <div class="section-badge-header">
+              <span class="badge badge-blue">1. Web UI Control Panel</span>
+              <button class="btn-copy-chip" onclick="copyValue('res-web-url')">Copy URL</button>
+            </div>
+            <div class="credential-box">
+              <div class="cred-row">
+                <span class="cred-label">Login URL:</span>
+                <a id="res-web-url-link" href="#" target="_blank" class="cred-link">
+                  <span id="res-web-url"></span> ↗
+                </a>
+              </div>
+              <div class="cred-row">
+                <span class="cred-label">Username:</span>
+                <span id="res-web-user" class="cred-code"></span>
+              </div>
+              <div class="cred-row">
+                <span class="cred-label">Password:</span>
+                <span id="res-web-pass" class="cred-code cred-highlight"></span>
+              </div>
+            </div>
+          </div>
+
+          <div class="details-section">
+            <div class="section-badge-header">
+              <span class="badge badge-emerald">2. SFTP File Upload</span>
+              <button class="btn-copy-chip" onclick="copySFTPConfig()">Copy SFTP Details</button>
+            </div>
+            <div class="credential-box">
+              <div class="cred-row">
+                <span class="cred-label">Protocol:</span>
+                <span class="cred-code">SFTP (Port 22)</span>
+              </div>
+              <div class="cred-row">
+                <span class="cred-label">Host/Server:</span>
+                <span id="res-sftp-host" class="cred-code"></span>
+              </div>
+              <div class="cred-row">
+                <span class="cred-label">Port:</span>
+                <span id="res-sftp-port" class="cred-code">22</span>
+              </div>
+              <div class="cred-row">
+                <span class="cred-label">Username:</span>
+                <span id="res-sftp-user" class="cred-code"></span>
+              </div>
+              <div class="cred-row">
+                <span class="cred-label">Password:</span>
+                <span id="res-sftp-pass" class="cred-code cred-highlight"></span>
+              </div>
+              <div class="cred-row">
+                <span class="cred-label">Upload Path:</span>
+                <span id="res-sftp-docroot" class="cred-code text-accent"></span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Complete Handover Text for Copy-Pasting -->
+          <div class="details-section">
+            <div class="section-badge-header">
+              <span class="badge badge-purple">3. Handover Letter / Email</span>
+              <button class="btn btn-secondary btn-xs" onclick="copyFullHandover()">
+                📋 Copy All Text
+              </button>
+            </div>
+            <textarea id="res-handover-raw" class="raw-code-box" readonly rows="8"></textarea>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- Quick Documentation / CLI reference -->
+    <section id="quick-docs" class="card docs-card">
+      <h3 class="docs-title">⚡ Command Line Automation & API</h3>
+      <p class="docs-desc">You can also provision accounts directly from terminal or integrate into external systems:</p>
+      
+      <div class="docs-grid">
+        <div class="docs-box">
+          <div class="docs-box-title">CLI Terminal Provisioning</div>
+          <pre><code># Provision on cPanel
+python3 cli.py create --panel cpanel --domain customer.bt --email client@bt.bt --save
+
+# Provision on DirectAdmin
+python3 cli.py create --panel directadmin --domain client2.bt --email client@bt.bt
+
+# Test Server Connections
+python3 cli.py test --panel cpanel
+python3 cli.py test --panel directadmin</code></pre>
+        </div>
+
+        <div class="docs-box">
+          <div class="docs-box-title">REST API Webhook Endpoint</div>
+          <pre><code># POST /api/v1/accounts/create
+curl -X POST http://localhost:8000/api/v1/accounts/create \
+  -H "Content-Type: application/json" \
+  -d '{
+    "panel": "cpanel",
+    "domain": "customer.bt",
+    "email": "client@bt.bt"
+  }'</code></pre>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <script src="/static/js/app.js"></script>
+</body>
+</html>
