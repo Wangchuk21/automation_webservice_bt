@@ -13,7 +13,7 @@ from config import settings
 from provisioners.cpanel import CPanelProvisioner
 from provisioners.directadmin import DirectAdminProvisioner
 from provisioners.base import generate_secure_password, sanitize_username
-from notifier import send_customer_welcome_email
+from notifier import send_customer_welcome_email, test_smtp_connection
 
 app = FastAPI(
     title="Automation WebService BT",
@@ -134,6 +134,13 @@ async def check_servers():
             "status": da_status
         }
     }
+
+
+@app.post("/api/v1/smtp/test")
+async def test_smtp(recipient: Optional[str] = None):
+    """Test SMTP connection to Zimbra/mail server, optionally sending a test email."""
+    ok, msg = test_smtp_connection(recipient=recipient)
+    return {"success": ok, "message": msg, "host": settings.SMTP_HOST, "port": settings.SMTP_PORT}
 
 
 @app.post("/api/v1/accounts/create")

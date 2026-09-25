@@ -10,7 +10,7 @@ from rich.table import Table
 from config import settings
 from provisioners.cpanel import CPanelProvisioner
 from provisioners.directadmin import DirectAdminProvisioner
-from notifier import send_customer_welcome_email
+from notifier import send_customer_welcome_email, test_smtp_connection
 
 console = Console()
 
@@ -123,6 +123,15 @@ def handle_create(args):
             console.print(f"[yellow]! Email Warning:[/yellow] {email_msg}")
 
 
+def handle_test_smtp(args):
+    console.print(f"\n[bold blue]Testing SMTP server ({settings.SMTP_HOST}:{settings.SMTP_PORT}, SSL={settings.SMTP_SSL})...[/bold blue]")
+    ok, msg = test_smtp_connection(recipient=args.recipient)
+    if ok:
+        console.print(f"[bold green]✓ SUCCESS:[/bold green] {msg}")
+    else:
+        console.print(f"[bold red]✗ FAILED:[/bold red] {msg}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Shared Hosting Account Automation (cPanel & DirectAdmin)")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -131,6 +140,11 @@ def main():
     test_parser = subparsers.add_parser("test", help="Test connectivity to hosting server")
     test_parser.add_argument("--panel", choices=["cpanel", "directadmin"], required=True, help="Target panel")
     test_parser.set_defaults(func=handle_test)
+
+    # Test SMTP command
+    smtp_parser = subparsers.add_parser("test-smtp", help="Test Zimbra / SMTP connection & authentication")
+    smtp_parser.add_argument("--recipient", help="Optional recipient email to send a test message to")
+    smtp_parser.set_defaults(func=handle_test_smtp)
 
     # Create command
     create_parser = subparsers.add_parser("create", help="Create new hosting user account")
