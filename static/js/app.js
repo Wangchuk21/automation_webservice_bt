@@ -21,6 +21,31 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 });
 
+// Turn an API error body into a message worth showing a user.
+//
+// A 422 from FastAPI carries {"detail": [{loc, msg, type}, ...]} rather than
+// {"message": ...}, so reading result.message alone would hide validation
+// errors behind a generic failure and point at the wrong thing (.env
+// credentials) when the real problem is the domain the user typed.
+function describeApiError(result, status) {
+  if (result && result.message) return result.message;
+
+  const detail = result && result.detail;
+  if (Array.isArray(detail) && detail.length) {
+    return detail.map((e) => {
+      const field = Array.isArray(e.loc) ? e.loc[e.loc.length - 1] : null;
+      // Drop pydantic's "Value error, " prefix -- it is noise for end users.
+      const msg = String(e.msg || "").replace(/^Value error,\s*/, "");
+      return field ? `${field}: ${msg}` : msg;
+    }).join("\n");
+  }
+  if (typeof detail === "string") return detail;
+
+  return status === 422
+    ? "Please check the highlighted fields and try again."
+    : "Failed to provision account.";
+}
+
 // Render the outcome of the nic.bt.bt registry push, if one was requested.
 function renderNicStatus(nic) {
   const box = document.getElementById("res-nic-status");
@@ -237,7 +262,7 @@ async function handleProvisionSubmit(e) {
     const result = await response.json();
 
     if (!response.ok || !result.success) {
-      throw new Error(result.message || "Failed to provision account.");
+      throw new Error(describeApiError(result, response.status));
     }
 
     // Success!
@@ -251,7 +276,7 @@ async function handleProvisionSubmit(e) {
     loadingState.classList.add("hidden");
     emptyState.classList.remove("hidden");
     showToast(error.message, "error");
-    alert(`Provisioning Failed:\n\n${error.message}\n\nPlease check server credentials in .env file or SSH access.`);
+    alert(`Provisioning Failed:\n\n${error.message}`);
   } finally {
     submitBtn.disabled = false;
     submitText.textContent = "Provision Hosting Account";
