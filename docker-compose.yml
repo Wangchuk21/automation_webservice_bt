@@ -1,0 +1,60 @@
+# Provisioning service for cPanel / DirectAdmin shared hosting.
+#
+# Usage:
+#   cp .env.example .env      # then fill in real server credentials
+#   docker-compose up -d --build
+#   docker-compose logs -f
+#
+# NOTE: this file targets the LEGACY `docker-compose` binary (v1 syntax,
+# `version: "3.8"`). It also works with the v2 `docker compose` plugin, which
+# will simply warn that `version` is obsolete.
+
+version: "3.8"
+
+services:
+  provisioner:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: bt-hosting-provisioner:latest
+    container_name: bt_provisioner
+    restart: unless-stopped
+
+    # All configuration comes from .env -- credentials never enter the image.
+    env_file:
+      - .env
+
+    # Bound to loopback on purpose. /api/v1/accounts/create currently has NO
+    # authentication, so publishing to 0.0.0.0 would let anyone who can reach
+    # this port provision real hosting accounts on your servers and receive the
+    # credentials. Use an SSH tunnel to reach it remotely:
+    #     ssh -L 8000:127.0.0.1:8000 user@this-host
+    # Once API_AUTH_TOKEN is enforced in app.py, change this to "8000:8000".
+    ports:
+      - "127.0.0.1:8000:8000"
+
+    # SSH private key for the cPanel / DirectAdmin servers, mounted read-only.
+    # config.py calls os.path.expanduser() on CPANEL_SSH_KEY_PATH, and the
+    # image sets HOME=/home/provisioner, so the in-container path is
+    # /home/provisioner/.ssh/id_rsa.
+    #
+    # Enabled below. Comment out this whole `volumes:` block if you authenticate
+    # with passwords instead (set CPANEL_SSH_PASSWORD / DIRECTADMIN_SSH_PASSWORD).
+    volumes:
+      - ~/.ssh:/home/provisioner/.ssh:ro
+
+    # The service writes nothing to disk: no database, no uploads, no state.
+    # handover_*.txt files are only produced by the CLI's --save flag, which is
+    # a separate one-off `docker-compose run` invocation, not the server.
+    read_only: true
+    tmpfs:
+      - /tmp
+
+    security_opt:
+      - no-new-privileges:true
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

@@ -36,7 +36,11 @@ automation_webservice_bt/
 ├── cli.py                     # Command-line interface for provisioning
 ├── config.py                  # Environment & server settings loader
 ├── notifier.py                # Email dispatcher for customer welcome letters
-├── requirements.txt           # Python dependencies
+├── nic_client.py              # nic.bt.bt domain registry client
+├── requirements.txt           # Python dependencies (exact pins)
+├── Dockerfile                 # Multi-stage container build
+├── docker-compose.yml         # Container orchestration
+├── .dockerignore              # Keeps secrets & host artifacts out of image
 ├── .env.example               # Server credentials & host configuration template
 ├── provisioners/
 │   ├── base.py                # Base provisioner class & handover templates
@@ -52,10 +56,87 @@ automation_webservice_bt/
 
 ---
 
-## ⚙️ Quick Setup
+## 🐳 Docker Deployment (Recommended)
+
+The service is stateless — no database, no volumes, no persistent state — so it
+containerizes cleanly. Reproducible builds come from the exact pins in
+`requirements.txt`.
+
+```bash
+cp .env.example .env      # then fill in real server credentials
+docker-compose up -d --build
+docker-compose logs -f
+```
+
+The service is then on **http://127.0.0.1:8000**.
+
+```bash
+docker-compose ps                 # health status
+docker-compose restart            # survives restarts
+docker-compose down               # stop
+docker-compose down --rmi local   # stop and remove the image
+```
+
+### Why the port binds to `127.0.0.1`
+
+`POST /api/v1/accounts/create` currently has **no authentication**. Publishing
+to `0.0.0.0` would let anyone who can reach the port provision real hosting
+accounts on your servers and receive the credentials in the response. So the
+compose file binds to loopback only. To use the dashboard from another machine,
+use an SSH tunnel rather than opening the port:
+
+```bash
+ssh -L 8000:127.0.0.1:8000 user@this-host
+```
+
+`config.py` already reads an `API_AUTH_TOKEN` setting, but nothing enforces it
+yet. Once that is wired up, change the mapping in `docker-compose.yml` to
+`"8000:8000"`.
+
+### SSH keys in the container
+
+Key-based SSH auth works via a read-only bind mount of `~/.ssh`:
+
+```yaml
+volumes:
+  - ~/.ssh:/home/provisioner/.ssh:ro
+```
+
+`config.py` calls `os.path.expanduser()` on `CPANEL_SSH_KEY_PATH`, and the image
+sets `HOME=/home/provisioner`, so in-container paths resolve under
+`/home/provisioner/.ssh/`. If you authenticate by password instead, comment out
+the `volumes:` block and set `CPANEL_SSH_PASSWORD` / `DIRECTADMIN_SSH_PASSWORD`
+in `.env`.
+
+### Running the CLI in a container
+
+```bash
+docker-compose run --rm provisioner python cli.py test --panel cpanel
+docker-compose run --rm provisioner python cli.py create \
+  --panel cpanel --domain client.bt --email client@client.bt --dry-run
+```
+
+### Image hardening
+
+- Two-stage build: build tooling stays in the builder, runtime is `python:3.13-slim` (~284 MB)
+- Runs as non-root `provisioner` (uid 1000)
+- `read_only: true` root filesystem with a `tmpfs` `/tmp`
+- `no-new-privileges:true`
+- `.dockerignore` excludes `.env`, `venv/`, `.git/`, and `__pycache__`, so no credentials or host artifacts enter the image
+- `HEALTHCHECK` hits `/api/v1/health`, which touches no external server
+
+> **Note:** `docker-compose.yml` uses v1 syntax (`version: "3.8"`) for the legacy
+> `docker-compose` binary. The v2 `docker compose` plugin also works and will
+> warn that `version` is obsolete.
+
+---
+
+## ⚙️ Quick Setup (Local / Virtualenv)
+
+Prefer Docker? Use the section above. For local development without containers:
 
 ### 1. Configure Server Credentials
-Copy [.env.example](file:///Users/tandingyeltshen/Documents/Automation/.env.example) to `.env`:
+Copy `.env.example` to `.env`:
 ```bash
 cp .env.example .env
 ```

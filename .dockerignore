@@ -1,0 +1,41 @@
+# Keep the build context small and prevent secrets from entering the image.
+
+# Secrets -- never bake credentials into a layer
+.env
+.env.local
+*.env
+!.env.example
+
+# Local virtualenv (rebuilt inside the image; a host venv is wrong-arch and wrong-path)
+venv/
+.venv/
+env/
+
+# Python bytecode / build artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+.mypy_cache/
+
+# Version control
+.git/
+.gitignore
+.github/
+
+# Editor / OS noise
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Logs
+*.log
+logs/
+
+# Container files themselves
+Dockerfile
+.dockerignore
+docker-compose.yml
