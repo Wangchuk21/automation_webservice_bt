@@ -79,19 +79,46 @@ docker-compose down --rmi local   # stop and remove the image
 
 ### Why the port binds to `127.0.0.1`
 
-`POST /api/v1/accounts/create` currently has **no authentication**. Publishing
-to `0.0.0.0` would let anyone who can reach the port provision real hosting
-accounts on your servers and receive the credentials in the response. So the
-compose file binds to loopback only. To use the dashboard from another machine,
-use an SSH tunnel rather than opening the port:
+`docker-compose.yml` publishes to loopback only, so the service is not reachable
+from the network. Loopback alone is the entire access boundary, which is why the
+API token below matters if you ever change that.
+
+To use the dashboard from another machine, use an SSH tunnel rather than opening
+the port:
 
 ```bash
 ssh -L 8000:127.0.0.1:8000 user@this-host
 ```
 
-`config.py` already reads an `API_AUTH_TOKEN` setting, but nothing enforces it
-yet. Once that is wired up, change the mapping in `docker-compose.yml` to
-`"8000:8000"`.
+### API authentication
+
+Every `/api/v1` endpoint is gated by an optional shared token, sent as the
+`X-API-Token` header. This includes `POST /api/v1/accounts/create` and
+`POST /api/v1/nic/register`, which create hosting accounts and write to the
+national domain registry.
+
+**With `API_AUTH_TOKEN` empty (the default) the API is open** — suitable for
+local use on `127.0.0.1`. To lock it down, set a token in `.env`:
+
+```bash
+python3 -c "import secrets; print(secrets.token_urlsafe(32))"
+```
+
+Then restart the container and paste the value into the **API Token** box on the
+dashboard. It is kept in browser `localStorage` and is never rendered into the
+served HTML.
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/accounts/create \
+  -H "X-API-Token: <token>" -H "Content-Type: application/json" \
+  -d '{"panel":"cpanel","domain":"customer.bt","dry_run":true}'
+```
+
+`/` and `/api/v1/health` are intentionally left open: the dashboard must load
+before a token can be entered, and the Docker healthcheck cannot send headers.
+
+> If you expose this beyond loopback, use HTTPS as well — the token would
+> otherwise travel in cleartext.
 
 ### SSH keys in the container
 

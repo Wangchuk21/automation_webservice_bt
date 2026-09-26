@@ -1,6 +1,7 @@
 import warnings
 warnings.filterwarnings("ignore")
-from fastapi import FastAPI, HTTPException, Request, Depends
+import secrets
+from fastapi import FastAPI, HTTPException, Request, Depends, Header
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -43,6 +44,33 @@ STATIC_DIR.mkdir(parents=True, exist_ok=True)
 
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+
+# ---------------------------------------------------------------------------
+# API authentication
+#
+# Every /api/v1 endpoint below is capable of creating hosting accounts or
+# writing to the national domain registry, so they are gated by an optional
+# shared token sent as `X-API-Token`.
+#
+# When API_AUTH_TOKEN is unset the service stays open, which keeps local
+# development and the single-operator dashboard working with no extra setup.
+# Set it in .env to lock the API down. / and /api/v1/health are intentionally
+# left open: the dashboard must load before a token can be entered, and the
+# Docker healthcheck has no way to send headers.
+# ---------------------------------------------------------------------------
+def require_api_token(x_api_token: Optional[str] = Header(None, alias="X-API-Token")) -> None:
+    expected = settings.API_AUTH_TOKEN
+    if not expected:
+        return  # No token configured -> open, for local use
+    if not x_api_token:
+        raise HTTPException(
+            status_code=401,
+            detail="Missing X-API-Token header. Send the API_AUTH_TOKEN value from .env.",
+        )
+    # Constant-time comparison to avoid leaking the token through timing.
+    if not secrets.compare_digest(x_api_token, expected):
+        raise HTTPException(status_code=401, detail="Invalid API token.")
 
 def get_cpanel_provisioner():
     return CPanelProvisioner(
@@ -152,14 +180,14 @@ async def health_check():
     return {"status": "ok", "service": "automation_webservice_bt"}
 
 
-@app.get("/api/v1/generate-credentials")
+@app.get("/api/v1/generate-credentials", dependencies=[Depends(require_api_token)])
 async def generate_credentials(domain: Optional[str] = None):
     pwd = generate_secure_password(16)
     user = sanitize_username(domain) if domain else ""
     return {"suggested_username": user, "suggested_password": pwd}
 
 
-@app.get("/api/v1/packages")
+@app.get("/api/v1/packages", dependencies=[Depends(require_api_token)])
 async def get_packages(panel: str = "cpanel"):
     if panel in ("cpanel", "whm"):
         prov = get_cpanel_provisioner()
@@ -170,7 +198,7 @@ async def get_packages(panel: str = "cpanel"):
     return {"panel": panel, "packages": ["default"]}
 
 
-@app.get("/api/v1/servers/status")
+@app.get("/api/v1/servers/status", dependencies=[Depends(require_api_token)])
 async def check_servers():
     """Test connection to both configured hosting servers."""
     cp_prov = get_cpanel_provisioner()
@@ -193,14 +221,14 @@ async def check_servers():
     }
 
 
-@app.post("/api/v1/smtp/test")
+@app.post("/api/v1/smtp/test", dependencies=[Depends(require_api_token)])
 async def test_smtp(recipient: Optional[str] = None):
     """Test SMTP connection to Zimbra/mail server, optionally sending a test email."""
     ok, msg = test_smtp_connection(recipient=recipient)
     return {"success": ok, "message": msg, "host": settings.SMTP_HOST, "port": settings.SMTP_PORT}
 
 
-@app.post("/api/v1/accounts/create")
+@app.post("/api/v1/accounts/create", dependencies=[Depends(require_api_token)])
 async def create_account(payload: AccountCreateRequest):
     panel = payload.panel.lower().strip()
     if panel in ("cpanel", "whm"):
@@ -295,7 +323,7 @@ async def create_account(payload: AccountCreateRequest):
     }
 
 
-@app.post("/api/v1/nic/test")
+@app.post("/api/v1/nic/test", dependencies=[Depends(require_api_token)])
 async def test_nic_portal():
     """Test login & access to nic.bt.bt registry portal."""
     nic = NICClient()
@@ -339,7 +367,7 @@ class DomainRegisterRequest(BaseModel):
         return validate_renewal_date(v) if v else v
 
 
-@app.post("/api/v1/nic/register")
+@app.post("/api/v1/nic/register", dependencies=[Depends(require_api_token)])
 async def register_nic_domain(payload: DomainRegisterRequest):
     """Directly register or update a domain on nic.bt.bt."""
     nic = NICClient()

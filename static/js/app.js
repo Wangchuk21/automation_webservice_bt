@@ -9,6 +9,21 @@ document.addEventListener("DOMContentLoaded", () => {
   generateNewPassword();
   checkServerHealth();
 
+  // API token: only needed when API_AUTH_TOKEN is set in .env. Kept in
+  // localStorage so it survives a page reload, and never rendered into the
+  // served HTML.
+  const tokenInput = document.getElementById("api_token");
+  if (tokenInput) {
+    tokenInput.value = localStorage.getItem("api_token") || "";
+    tokenInput.addEventListener("input", () => {
+      const v = tokenInput.value.trim();
+      if (v) localStorage.setItem("api_token", v);
+      else localStorage.removeItem("api_token");
+      updateAuthBanner();
+    });
+  }
+  updateAuthBanner();
+
   // Show the nic.bt.bt contact fields only when the registry push is requested.
   const nicToggle = document.getElementById("register_nic");
   const nicFields = document.getElementById("nic-fields");
@@ -20,6 +35,30 @@ document.addEventListener("DOMContentLoaded", () => {
     sync();
   }
 });
+
+// The token to send as X-API-Token, or null when the API is unauthenticated.
+function apiToken() {
+  return (localStorage.getItem("api_token") || "").trim() || null;
+}
+
+// Build headers for an API call, including the token when one is stored.
+function apiHeaders(extra) {
+  const headers = Object.assign({}, extra || {});
+  const t = apiToken();
+  if (t) headers["X-API-Token"] = t;
+  return headers;
+}
+
+// Tell the operator whether the API expects a token, so a 401 is not a mystery.
+function updateAuthBanner() {
+  const banner = document.getElementById("auth-banner");
+  if (!banner) return;
+  if (apiToken()) {
+    banner.classList.add("hidden");
+  } else {
+    banner.classList.remove("hidden");
+  }
+}
 
 // Turn an API error body into a message worth showing a user.
 //
@@ -134,7 +173,7 @@ async function loadPackages(panel = "cpanel") {
   const pkgSelect = document.getElementById("package");
   if (!pkgSelect) return;
   try {
-    const res = await fetch(`/api/v1/packages?panel=${panel}`);
+    const res = await fetch(`/api/v1/packages?panel=${panel}`, { headers: apiHeaders() });
     const data = await res.json();
     if (data.packages && data.packages.length > 0) {
       pkgSelect.innerHTML = "";
@@ -164,7 +203,7 @@ async function checkServerHealth() {
   text.textContent = "Checking...";
 
   try {
-    const res = await fetch("/api/v1/servers/status");
+    const res = await fetch("/api/v1/servers/status", { headers: apiHeaders() });
     const data = await res.json();
 
     const cpOk = data.cpanel?.status?.success;
@@ -254,7 +293,7 @@ async function handleProvisionSubmit(e) {
   try {
     const response = await fetch("/api/v1/accounts/create", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: apiHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({
         panel: panel,
         domain: domain,

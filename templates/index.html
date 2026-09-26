@@ -59,6 +59,22 @@
         </div>
 
         <form id="provision-form" onsubmit="handleProvisionSubmit(event)">
+
+          <!-- API token: only required when API_AUTH_TOKEN is set in .env -->
+          <div id="auth-banner" class="auth-banner hidden">
+            <div class="form-group">
+              <label for="api_token" class="form-label">API Token</label>
+              <div class="input-wrapper">
+                <input type="password" id="api_token" name="api_token"
+                       placeholder="Paste API_AUTH_TOKEN from .env" autocomplete="off">
+              </div>
+              <span class="form-hint">
+                This service requires an API token. It is stored only in your browser.
+                Leave blank if API_AUTH_TOKEN is not set in <code>.env</code>.
+              </span>
+            </div>
+          </div>
+
           <!-- Panel Selector -->
           <div class="form-group">
             <label class="form-label">Target Control Panel <span class="required">*</span></label>
