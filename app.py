@@ -185,16 +185,28 @@ async def create_account(payload: AccountCreateRequest):
         email_status = {"sent": sent, "message": err}
 
     nic_status = None
-    if payload.register_nic and not payload.dry_run:
-        nic = NICClient()
-        nic_res = nic.register_or_update_domain(
-            domain=result.domain,
-            customer_name=payload.customer_name or result.username,
-            email=payload.email or settings.SMTP_FROM_EMAIL,
-            phone=payload.phone or "+975",
-            address=payload.address or "Thimphu, Bhutan"
-        )
-        nic_status = nic_res
+    if payload.register_nic:
+        if payload.dry_run:
+            # Report the skip explicitly; returning None makes the dashboard
+            # show nothing at all, which reads as "silently ignored".
+            nic_status = {
+                "success": True,
+                "action": "skipped",
+                "domain": result.domain,
+                "message": (
+                    "nic.bt.bt update skipped because this was a dry-run. "
+                    "Tick the box and run without dry-run to push the domain."
+                ),
+            }
+        else:
+            nic = NICClient()
+            nic_status = nic.register_or_update_domain(
+                domain=result.domain,
+                customer_name=payload.customer_name or result.username,
+                email=payload.email or settings.SMTP_FROM_EMAIL,
+                phone=payload.phone or "+975",
+                address=payload.address or "Thimphu, Bhutan"
+            )
 
     return {
         "success": True,

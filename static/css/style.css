@@ -837,3 +837,93 @@ select.custom-select:focus {
 .hidden {
   display: none !important;
 }
+
+/* ============================================================
+   nic.bt.bt registry integration
+   ============================================================ */
+
+/* Contact fields shown only when the registry push is ticked */
+.nic-fields {
+  margin-top: 0.75rem;
+  padding: 1rem;
+  border: 1px dashed rgba(96, 165, 250, 0.35);
+  border-radius: var(--radius-sm);
+  background: rgba(59, 130, 246, 0.06);
+  animation: fadeIn 0.25s ease;
+}
+
+.nic-fields[hidden] {
+  display: none;
+}
+
+.nic-fields .form-hint {
+  color: var(--text-dim);
+  font-size: 0.75rem;
+}
+
+/* Outcome banner shown in the result panel after provisioning */
+.res-nic-status {
+  margin-top: 1rem;
+  padding: 0.9rem 1rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-color);
+  font-size: 0.875rem;
+}
+
+.res-nic-status.hidden {
+  display: none;
+}
+
+.res-nic-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.35rem;
+}
+
+.res-nic-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.25rem;
+  height: 1.25rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.res-nic-status p {
+  margin: 0;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.res-nic-status.nic-ok {
+  border-color: rgba(16, 185, 129, 0.4);
+  background: rgba(16, 185, 129, 0.08);
+}
+
+.res-nic-status.nic-ok .res-nic-badge {
+  background: var(--accent-emerald);
+  color: #052e16;
+}
+
+.res-nic-status.nic-fail {
+  border-color: rgba(244, 63, 94, 0.4);
+  background: rgba(244, 63, 94, 0.08);
+}
+
+.res-nic-status.nic-fail .res-nic-badge {
+  background: var(--accent-rose);
+  color: #4c0519;
+}
+
+.res-nic-status.nic-skip {
+  border-color: rgba(245, 158, 11, 0.4);
+  background: rgba(245, 158, 11, 0.08);
+}
+
+.res-nic-status.nic-skip .res-nic-badge {
+  background: var(--accent-amber);
+  color: #451a03;
+}

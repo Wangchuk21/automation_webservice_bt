@@ -8,7 +8,51 @@ let latestAccountData = null;
 document.addEventListener("DOMContentLoaded", () => {
   generateNewPassword();
   checkServerHealth();
+
+  // Show the nic.bt.bt contact fields only when the registry push is requested.
+  const nicToggle = document.getElementById("register_nic");
+  const nicFields = document.getElementById("nic-fields");
+  if (nicToggle && nicFields) {
+    const sync = () => {
+      nicFields.hidden = !nicToggle.checked;
+    };
+    nicToggle.addEventListener("change", sync);
+    sync();
+  }
 });
+
+// Render the outcome of the nic.bt.bt registry push, if one was requested.
+function renderNicStatus(nic) {
+  const box = document.getElementById("res-nic-status");
+  if (!box) return;
+
+  // No NIC block in the response means the option was not ticked.
+  if (nic === null || nic === undefined) {
+    box.classList.add("hidden");
+    box.innerHTML = "";
+    return;
+  }
+
+  const skipped = nic.action === "skipped";
+  const ok = !!nic.success && !skipped;
+  const label = nic.action === "created" ? "Registered"
+    : (nic.action === "updated" ? "Updated"
+    : (nic.action === "skipped" ? "Skipped (dry-run)" : "Result"));
+  const icon = skipped ? "ⓘ" : (ok ? "✓" : "⚠");
+  box.classList.remove("hidden");
+  box.className = `res-nic-status ${skipped ? "nic-skip" : (ok ? "nic-ok" : "nic-fail")}`;
+  box.innerHTML = `
+    <div class="res-nic-head">
+      <span class="res-nic-badge">${icon}</span>
+      <strong>nic.bt.bt — ${label}</strong>
+    </div>
+    <p>${nic.message || ""}</p>
+  `;
+
+  if (!ok && !skipped) {
+    showToast("Hosting account created, but the nic.bt.bt update failed. Check the panel.", "error");
+  }
+}
 
 // Toast notification helper
 function showToast(message, type = "success") {
@@ -149,6 +193,12 @@ async function handleProvisionSubmit(e) {
   const sendEmail = document.getElementById("send_email") ? document.getElementById("send_email").checked : false;
   const dryRun = document.getElementById("dry_run") ? document.getElementById("dry_run").checked : false;
 
+  // nic.bt.bt registry push
+  const registerNic = document.getElementById("register_nic") ? document.getElementById("register_nic").checked : false;
+  const customerName = (document.getElementById("customer_name") || {}).value || "";
+  const phone = (document.getElementById("phone") || {}).value || "";
+  const address = (document.getElementById("address") || {}).value || "";
+
   if (!domain) {
     showToast("Please enter a domain name.", "error");
     return;
@@ -176,6 +226,10 @@ async function handleProvisionSubmit(e) {
         email: email || null,
         package: packagePlan || null,
         send_email: sendEmail,
+        register_nic: registerNic,
+        customer_name: customerName || null,
+        phone: phone || null,
+        address: address || null,
         dry_run: dryRun
       })
     });
@@ -189,6 +243,7 @@ async function handleProvisionSubmit(e) {
     // Success!
     latestAccountData = result.data;
     renderResult(result.data);
+    renderNicStatus(result.data.nic_status);
     showToast(`Account for ${result.data.domain} successfully provisioned!`, "success");
 
   } catch (error) {

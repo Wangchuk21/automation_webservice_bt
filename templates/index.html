@@ -170,6 +170,41 @@
           </div>
           {% endif %}
 
+          <!-- NIC / Domain Registry (nic.bt.bt) -->
+          <div class="form-checkbox-row">
+            <label class="custom-checkbox">
+              <input type="checkbox" id="register_nic" name="register_nic">
+              <span class="checkmark"></span>
+              <span class="checkbox-label"><strong style="color: #60a5fa;">Register / Update on nic.bt.bt:</strong> Push the domain to the national registry after provisioning</span>
+            </label>
+          </div>
+
+          <!-- NIC contact details: only needed when the box above is ticked -->
+          <div id="nic-fields" class="nic-fields" hidden>
+            <div class="form-row">
+              <div class="form-group">
+                <label for="customer_name" class="form-label">Customer / Organization Name</label>
+                <div class="input-wrapper">
+                  <input type="text" id="customer_name" name="customer_name" placeholder="e.g. Karma Enterprises Pvt Ltd">
+                </div>
+                <span class="form-hint">Registered name on the domain record.</span>
+              </div>
+              <div class="form-group">
+                <label for="phone" class="form-label">Telephone</label>
+                <div class="input-wrapper">
+                  <input type="text" id="phone" name="phone" placeholder="+975-2-123456" value="+975">
+                </div>
+              </div>
+            </div>
+            <div class="form-group">
+              <label for="address" class="form-label">Postal Address</label>
+              <div class="input-wrapper">
+                <input type="text" id="address" name="address" placeholder="Thimphu, Bhutan" value="Thimphu, Bhutan">
+              </div>
+              <span class="form-hint">Defaults to "Thimphu, Bhutan" and +975 if left blank.</span>
+            </div>
+          </div>
+
           <!-- Action Buttons -->
           <div class="form-actions">
             <button type="submit" id="btn-submit" class="btn btn-primary btn-block">
@@ -290,6 +325,9 @@
             </div>
             <textarea id="res-handover-raw" class="raw-code-box" readonly rows="8"></textarea>
           </div>
+
+          <!-- nic.bt.bt registry outcome (only shown when the option was ticked) -->
+          <div id="res-nic-status" class="res-nic-status hidden"></div>
         </div>
       </section>
     </main>
