@@ -83,9 +83,9 @@ class AccountCreateRequest(BaseModel):
 @app.get("/", response_class=HTMLResponse)
 async def serve_dashboard(request: Request):
     return templates.TemplateResponse(
+        request,
         "index.html",
         {
-            "request": request,
             "cpanel_host": settings.CPANEL.host,
             "cpanel_web": settings.CPANEL.web_url,
             "da_host": settings.DIRECTADMIN.host,

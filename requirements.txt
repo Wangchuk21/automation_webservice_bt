@@ -1,10 +1,25 @@
-fastapi>=0.110.0
-uvicorn>=0.28.0
-paramiko>=3.4.0
-requests>=2.31.0
-pydantic>=2.6.0
-pydantic-settings>=2.2.0
-python-dotenv>=1.0.1
-jinja2>=3.1.3
-rich>=13.7.1
-httpx>=0.27.0
+# Pinned to exact known-working versions.
+#
+# Why exact pins: loose `>=` floors allowed a silent jump to Starlette 1.x,
+# which changed the TemplateResponse signature and broke the dashboard with
+# `TypeError: unhashable type: 'dict'`. Re-pin deliberately and test, rather
+# than inheriting whatever a fresh `pip install` resolves to.
+
+# --- Web framework ---
+fastapi==0.141.1
+# Listed explicitly (not just a transitive fastapi dep) because the app imports
+# Jinja2Templates / StaticFiles / HTMLResponse, which are Starlette re-exports.
+starlette==1.7.0
+uvicorn==0.54.0
+jinja2==3.1.6
+
+# --- Validation & config ---
+pydantic==2.13.5
+python-dotenv==1.2.3
+
+# --- Hosting server automation ---
+paramiko==5.0.0
+requests==2.34.2
+
+# --- CLI output ---
+rich==15.0.0
