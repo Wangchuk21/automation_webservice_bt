@@ -3,10 +3,9 @@ import re
 from datetime import date
 from typing import Dict, Any, Optional, Tuple
 import requests
-import urllib3
 from config import settings
+from tls_config import resolve_verify
 
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 logger = logging.getLogger(__name__)
 
 
@@ -42,7 +41,10 @@ class NICClient:
         self.username = username or getattr(settings, "NIC_USER", "admin@bt.bt")
         self.password = password or getattr(settings, "NIC_PASSWORD", "")
         self.session = requests.Session()
-        self.session.verify = False
+        # nic.bt.bt presents a valid Let's Encrypt certificate, so verification
+        # is enabled. This session carries the registry admin credentials, which
+        # is exactly the traffic that must not be interceptable.
+        self.session.verify = resolve_verify()
         self._logged_in = False
 
     def login(self) -> Tuple[bool, str]:

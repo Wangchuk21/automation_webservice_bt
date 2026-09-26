@@ -35,6 +35,7 @@ automation_webservice_bt/
 ├── app.py                     # FastAPI web service & webhook endpoints
 ├── cli.py                     # Command-line interface for provisioning
 ├── config.py                  # Environment & server settings loader
+├── tls_config.py              # Shared TLS verification settings
 ├── notifier.py                # Email dispatcher for customer welcome letters
 ├── nic_client.py              # nic.bt.bt domain registry client
 ├── requirements.txt           # Python dependencies (exact pins)
@@ -76,6 +77,30 @@ docker-compose restart            # survives restarts
 docker-compose down               # stop
 docker-compose down --rmi local   # stop and remove the image
 ```
+
+### TLS certificate verification
+
+All HTTPS calls (WHM, DirectAdmin, nic.bt.bt) verify server certificates.
+Controlled by `TLS_VERIFY` in `.env`, which defaults to `true`. For a private
+CA, point `TLS_CA_BUNDLE` at the CA file instead of disabling verification.
+
+**If a server is addressed by IP, you must also set its `TLS_HOSTNAME`.** The
+cPanel and DirectAdmin certificates carry DNS SANs only — `CN=thimpchu.druknet.bt`
+and `CN=yongnay.druknet.bt` — so verifying a connection opened to the bare IP
+fails hostname matching even though the certificate chain is trusted:
+
+```ini
+CPANEL_SERVER_HOST=202.144.128.216        # used for SSH
+CPANEL_TLS_HOSTNAME=thimpchu.druknet.bt   # used for HTTPS/SNI
+DIRECTADMIN_SERVER_HOST=202.144.128.131
+DIRECTADMIN_TLS_HOSTNAME=yongnay.druknet.bt
+```
+
+Leaving `TLS_HOSTNAME` blank works when `SERVER_HOST` is already a hostname.
+
+`DIRECTADMIN_SERVER_IP` sets the address assigned to newly created accounts. It
+is required — account creation fails with a clear message rather than guessing
+an IP.
 
 ### Why the port binds to `127.0.0.1`
 

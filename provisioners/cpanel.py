@@ -3,7 +3,6 @@ import logging
 import shlex
 from typing import Optional, Dict, Any
 import requests
-import urllib3
 
 from .base import (
     BaseProvisioner,
@@ -12,8 +11,8 @@ from .base import (
     sanitize_username
 )
 from .ssh_client import SSHExecutor
+from tls_config import resolve_verify, api_base_url
 
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 logger = logging.getLogger(__name__)
 
 class CPanelProvisioner(BaseProvisioner):
@@ -32,6 +31,7 @@ class CPanelProvisioner(BaseProvisioner):
         whm_password: Optional[str] = None,
         whm_user: str = "root",
         web_url: Optional[str] = None,
+        tls_hostname: str = "",
         sftp_port: int = 22,
         default_plan: str = "default",
         nameservers: str = "ns1.yourdomain.bt, ns2.yourdomain.bt"
@@ -45,6 +45,9 @@ class CPanelProvisioner(BaseProvisioner):
         self.whm_password = whm_password
         self.whm_user = whm_user
         self.web_url = web_url or f"https://{host}:2083"
+        # DNS name on the server certificate; used for HTTPS calls so hostname
+        # verification succeeds when the server is addressed by IP.
+        self.tls_hostname = tls_hostname or ""
         # Port extracted so each customer gets their own domain-based login URL
         try:
             from urllib.parse import urlparse as _uparse
@@ -67,15 +70,16 @@ class CPanelProvisioner(BaseProvisioner):
         """Test connectivity via API (if token or password provided) or SSH."""
         if self.whm_api_token or self.whm_password:
             try:
-                url = f"https://{self.host}:2087/json-api/version?api.version=1"
+                url = f"{api_base_url(self.host, self.tls_hostname, 2087)}/json-api/version?api.version=1"
                 headers = {}
                 auth = None
                 if self.whm_api_token:
                     headers["Authorization"] = f"whm {self.whm_user}:{self.whm_api_token}"
                 else:
                     auth = (self.whm_user, self.whm_password)
-                
-                resp = requests.get(url, headers=headers, auth=auth, verify=False, timeout=10)
+
+                resp = requests.get(url, headers=headers, auth=auth,
+                                    verify=resolve_verify(), timeout=10)
                 if resp.status_code == 200:
                     data = resp.json()
                     return {"success": True, "method": "WHM_API", "message": f"Connected to cPanel/WHM API (Version: {data.get('version', 'unknown')})"}
@@ -322,7 +326,7 @@ class CPanelProvisioner(BaseProvisioner):
         quota_mb: Optional[int],
         customer_web_url: str = ""
     ) -> ProvisionerResult:
-        url = f"https://{self.host}:2087/json-api/createacct?api.version=1"
+        url = f"{api_base_url(self.host, self.tls_hostname, 2087)}/json-api/createacct?api.version=1"
         headers = {}
         auth = None
         if self.whm_api_token:
@@ -342,7 +346,8 @@ class CPanelProvisioner(BaseProvisioner):
             params["quota"] = quota_mb
 
         try:
-            response = requests.get(url, headers=headers, auth=auth, params=params, verify=False, timeout=30)
+            response = requests.get(url, headers=headers, auth=auth, params=params,
+                                    verify=resolve_verify(), timeout=30)
             data = response.json()
             metadata = data.get("metadata", {})
             if metadata.get("result") == 1:

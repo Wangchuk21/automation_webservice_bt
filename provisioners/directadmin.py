@@ -1,8 +1,8 @@
 import urllib.parse
 import logging
+import shlex
 from typing import Optional, Dict, Any
 import requests
-import urllib3
 
 from .base import (
     BaseProvisioner,
@@ -11,8 +11,8 @@ from .base import (
     sanitize_username
 )
 from .ssh_client import SSHExecutor
+from tls_config import resolve_verify, api_base_url
 
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 logger = logging.getLogger(__name__)
 
 class DirectAdminProvisioner(BaseProvisioner):
@@ -30,6 +30,8 @@ class DirectAdminProvisioner(BaseProvisioner):
         api_user: str = "admin",
         api_password: Optional[str] = None,
         web_url: Optional[str] = None,
+        tls_hostname: str = "",
+        server_ip: str = "",
         sftp_port: int = 22,
         default_package: str = "default",
         nameservers: str = "ns1.yourdomain.bt, ns2.yourdomain.bt"
@@ -42,6 +44,11 @@ class DirectAdminProvisioner(BaseProvisioner):
         self.api_user = api_user
         self.api_password = api_password
         self.web_url = web_url or f"https://{host}:2222"
+        # DNS name on the server certificate, for HTTPS calls.
+        self.tls_hostname = tls_hostname or ""
+        # Address assigned to newly created accounts. Previously hardcoded,
+        # which silently provisioned the wrong IP if the server changed.
+        self.server_ip = server_ip or ""
         # Port extracted so each customer gets their own domain-based login URL
         try:
             from urllib.parse import urlparse as _uparse
@@ -64,9 +71,9 @@ class DirectAdminProvisioner(BaseProvisioner):
         """Test DirectAdmin connection via API or SSH."""
         if self.api_password:
             try:
-                url = f"https://{self.host}:2222/CMD_API_SHOW_USERS"
+                url = f"{api_base_url(self.host, self.tls_hostname, 2222)}/CMD_API_SHOW_USERS"
                 auth = (self.api_user, self.api_password)
-                resp = requests.get(url, auth=auth, verify=False, timeout=10)
+                resp = requests.get(url, auth=auth, verify=resolve_verify(), timeout=10)
                 if resp.status_code == 200 and "error=1" not in resp.text:
                     return {"success": True, "method": "DIRECTADMIN_API", "message": "Connected to DirectAdmin API successfully."}
             except Exception as e:
@@ -146,7 +153,7 @@ class DirectAdminProvisioner(BaseProvisioner):
         doc_root: str,
         customer_web_url: str = ""
     ) -> ProvisionerResult:
-        url = f"https://{self.host}:2222/CMD_API_ACCOUNT_USER"
+        url = f"{api_base_url(self.host, self.tls_hostname, 2222)}/CMD_API_ACCOUNT_USER"
         auth = (self.api_user, self.api_password)
         data = {
             "action": "create",
@@ -161,7 +168,8 @@ class DirectAdminProvisioner(BaseProvisioner):
         }
 
         try:
-            resp = requests.post(url, auth=auth, data=data, verify=False, timeout=30)
+            resp = requests.post(url, auth=auth, data=data,
+                                 verify=resolve_verify(), timeout=30)
             parsed = urllib.parse.parse_qs(resp.text)
             
             # DirectAdmin API returns 'error=0' or details on success, or 'error=1' on error
@@ -214,9 +222,9 @@ class DirectAdminProvisioner(BaseProvisioner):
         # Prefer API method — faster, no sudo escalation needed
         if self.api_password:
             try:
-                url = f"https://{self.host}:2222/CMD_API_PACKAGES_USER"
+                url = f"{api_base_url(self.host, self.tls_hostname, 2222)}/CMD_API_PACKAGES_USER"
                 auth = (self.api_user, self.api_password)
-                resp = requests.get(url, auth=auth, verify=False, timeout=10)
+                resp = requests.get(url, auth=auth, verify=resolve_verify(), timeout=10)
                 if resp.status_code == 200:
                     import urllib.parse as _up
                     parsed = _up.parse_qs(resp.text)
@@ -255,6 +263,18 @@ class DirectAdminProvisioner(BaseProvisioner):
         escaped_domain = domain.replace("'", "'\\''")
         escaped_email = email.replace("'", "'\\''")
         escaped_pkg = pkg.replace("'", "'\\''")
+        # shlex.quote covers every metacharacter, unlike the hand-rolled
+        # single-quote escaping above. The IP is config-supplied but still
+        # quoted, since it is interpolated into a remote shell command.
+        escaped_server_ip = shlex.quote(self.server_ip) if self.server_ip else ""
+        if not self.server_ip:
+            # DirectAdmin requires an IP on account creation. Fail loudly rather
+            # than create the account with a blank or wrong address.
+            return self._build_failure_result(
+                domain, username, password, email, doc_root,
+                "DIRECTADMIN_SERVER_IP is not configured. Set it in .env to the "
+                "server address DirectAdmin should assign to new accounts."
+            )
         
         # Use on-demand authorized API URL from /usr/bin/da api-url inside server
         da_cmd = (
@@ -268,7 +288,7 @@ class DirectAdminProvisioner(BaseProvisioner):
             f"-d \"passwd2={escaped_password}\" "
             f"-d \"domain={escaped_domain}\" "
             f"-d \"package={escaped_pkg}\" "
-            f"-d \"ip=202.144.128.131\" "
+            f"-d \"ip={escaped_server_ip}\" "
             f"-d \"notify=no\""
         )
 

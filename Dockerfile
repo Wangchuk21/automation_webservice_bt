@@ -45,7 +45,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=builder /opt/venv /opt/venv
 
 WORKDIR /app
-COPY --chown=provisioner:provisioner app.py cli.py config.py notifier.py nic_client.py ./
+COPY --chown=provisioner:provisioner app.py cli.py config.py notifier.py nic_client.py tls_config.py ./
 COPY --chown=provisioner:provisioner provisioners/ ./provisioners/
 COPY --chown=provisioner:provisioner templates/ ./templates/
 COPY --chown=provisioner:provisioner static/ ./static/

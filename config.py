@@ -4,8 +4,10 @@ from pathlib import Path
 from typing import Optional
 from dotenv import load_dotenv
 
+# Silence only the specific "urllib3 v2 needs OpenSSL 1.1.1+" environment
+# notice. A blanket UserWarning filter for urllib3 would also hide genuine
+# certificate problems, which is exactly what must stay visible.
 warnings.filterwarnings("ignore", message=".*urllib3 v2 only supports OpenSSL 1.1.1+.*")
-warnings.filterwarnings("ignore", category=UserWarning, module="urllib3")
 
 # Load .env if present
 env_path = Path(__file__).resolve().parent / ".env"
@@ -16,6 +18,16 @@ class ServerConfig:
         self.host = os.getenv(f"{prefix}_SERVER_HOST", "localhost")
         self.web_port = int(os.getenv(f"{prefix}_WEB_PORT", "2083" if "CPANEL" in prefix else "2222"))
         self.web_url = os.getenv(f"{prefix}_WEB_URL", f"https://{self.host}:{self.web_port}")
+
+        # Hostname used for HTTPS/TLS calls and SNI when the server is reached
+        # by IP. The cPanel and DirectAdmin certificates carry DNS SANs only
+        # (CN=thimpchu.druknet.bt, CN=yongnay.druknet.bt), so verifying a
+        # connection opened to the bare IP fails hostname matching even though
+        # the certificate chain itself is trusted. Leave empty when SERVER_HOST
+        # is already a hostname.
+        self.tls_hostname = os.getenv(f"{prefix}_TLS_HOSTNAME", "")
+        # Address to assign to newly created accounts on this server.
+        self.server_ip = os.getenv(f"{prefix}_SERVER_IP", "")
         
         # SSH settings
         self.ssh_port = int(os.getenv(f"{prefix}_SSH_PORT", "22"))
@@ -44,6 +56,15 @@ class Config:
     HOST: str = os.getenv("HOST", "0.0.0.0")
     SECRET_KEY: str = os.getenv("SECRET_KEY", "automation-secret-bt")
     API_AUTH_TOKEN: Optional[str] = os.getenv("API_AUTH_TOKEN", None)
+
+    # --- TLS ---
+    # Verify server certificates on every HTTPS call (WHM, DirectAdmin,
+    # nic.bt.bt). All of these servers present publicly-trusted Let's Encrypt /
+    # Sectigo certificates, so verification works. Set false only if you must,
+    # and prefer pointing TLS_CA_BUNDLE at a private CA instead.
+    TLS_VERIFY: bool = os.getenv("TLS_VERIFY", "true").lower() in ("true", "1", "yes")
+    # Optional path to a CA bundle (e.g. an internal root) for private CAs.
+    TLS_CA_BUNDLE: str = os.getenv("TLS_CA_BUNDLE", "")
     
     # Servers
     CPANEL = ServerConfig("CPANEL")

@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-import warnings
-warnings.filterwarnings("ignore")
 import argparse
 import sys
 from rich.console import Console
@@ -38,6 +36,7 @@ def get_provisioner(panel_type: str):
             whm_password=settings.CPANEL.whm_password,
             whm_user=settings.CPANEL.whm_user,
             web_url=settings.CPANEL.web_url,
+            tls_hostname=settings.CPANEL.tls_hostname,
             sftp_port=settings.CPANEL.sftp_port,
             default_plan=settings.CPANEL.default_plan,
             nameservers=settings.CPANEL.nameservers
@@ -52,6 +51,8 @@ def get_provisioner(panel_type: str):
             api_user=settings.DIRECTADMIN.api_user,
             api_password=settings.DIRECTADMIN.api_password,
             web_url=settings.DIRECTADMIN.web_url,
+            tls_hostname=settings.DIRECTADMIN.tls_hostname,
+            server_ip=settings.DIRECTADMIN.server_ip,
             sftp_port=settings.DIRECTADMIN.sftp_port,
             default_package=settings.DIRECTADMIN.default_package,
             nameservers=settings.DIRECTADMIN.nameservers
