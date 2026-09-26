@@ -1,5 +1,6 @@
 import json
 import logging
+import shlex
 from typing import Optional, Dict, Any
 import requests
 import urllib3
@@ -88,14 +89,16 @@ class CPanelProvisioner(BaseProvisioner):
     def list_packages(self) -> list:
         """Fetch available packages on the cPanel server."""
         cmd = "whmapi1 --output=json listpkgs"
+        sudo_stdin = None
         if self.ssh_user != "root":
             if self.ssh_password:
-                cmd = f"echo '{self.ssh_password}' | sudo -S " + cmd
+                cmd = "sudo -S -p '' " + cmd
+                sudo_stdin = self.ssh_password + "\n"
             else:
                 cmd = "sudo -n " + cmd
 
         try:
-            code, stdout, stderr = self.ssh.execute(cmd)
+            code, stdout, stderr = self.ssh.execute(cmd, stdin_data=sudo_stdin)
             clean = "\n".join(l for l in stdout.splitlines() if not l.startswith("[sudo]")).strip()
             data = json.loads(clean)
             return [p.get("name") for p in data.get("data", {}).get("pkg", [])]
@@ -172,32 +175,46 @@ class CPanelProvisioner(BaseProvisioner):
         quota_mb: Optional[int],
         customer_web_url: str = ""
     ) -> ProvisionerResult:
-        # Escape single quotes in password for bash
-        escaped_password = password.replace("'", "'\\''")
-        
+        # Every value interpolated into the remote shell command MUST go through
+        # shlex.quote(). Escaping only the password left username, domain,
+        # contactemail and plan injectable: a domain of
+        #   x.bt'; id > /tmp/pwn; echo '
+        # closed the quote and executed a second command as root via sudo.
+        # shlex.quote() neutralises every shell metacharacter, not just quotes.
+        q_username = shlex.quote(username)
+        q_domain = shlex.quote(domain)
+        q_password = shlex.quote(password)
+        q_email = shlex.quote(email)
+        q_plan = shlex.quote(plan)
+
         # Command using WHM API CLI tool directly on the server
         # whmapi1 createacct --output=json username=... domain=... password=... plan=...
         cmd = (
             f"whmapi1 --output=json createacct "
-            f"username='{username}' "
-            f"domain='{domain}' "
-            f"password='{escaped_password}' "
-            f"contactemail='{email}'"
+            f"username={q_username} "
+            f"domain={q_domain} "
+            f"password={q_password} "
+            f"contactemail={q_email}"
         )
         if plan and plan.lower() != "default":
-            cmd += f" plan='{plan}'"
+            cmd += f" plan={q_plan}"
         if quota_mb:
-            cmd += f" quota='{quota_mb}'"
+            # quota_mb is an int, so it cannot carry shell syntax.
+            cmd += f" quota={int(quota_mb)}"
 
+        # The sudo password is fed via stdin, never interpolated into the command.
+        sudo_stdin = None
         if self.ssh_user != "root":
             if self.ssh_password:
-                escaped_sudo_pw = self.ssh_password.replace("'", "'\\''")
-                cmd = f"echo '{escaped_sudo_pw}' | sudo -S " + cmd
+                # -S reads the password from stdin; -p '' suppresses the prompt so
+                # nothing is echoed back into stdout.
+                cmd = "sudo -S -p '' " + cmd
+                sudo_stdin = self.ssh_password + "\n"
             else:
                 cmd = "sudo -n " + cmd
 
         try:
-            exit_code, stdout, stderr = self.ssh.execute(cmd)
+            exit_code, stdout, stderr = self.ssh.execute(cmd, stdin_data=sudo_stdin)
             clean_stdout = "\n".join(l for l in stdout.splitlines() if not l.startswith("[sudo]")).strip()
             
             # Check if whmapi1 succeeded
@@ -240,18 +257,22 @@ class CPanelProvisioner(BaseProvisioner):
                     pass
 
             # Fallback to /scripts/createacct
-            fallback_cmd = f"/usr/local/cpanel/scripts/createacct --domain='{domain}' --user='{username}' --pass='{escaped_password}' --contactemail='{email}'"
+            fallback_cmd = (
+                f"/usr/local/cpanel/scripts/createacct "
+                f"--domain={q_domain} --user={q_username} "
+                f"--pass={q_password} --contactemail={q_email}"
+            )
             if plan and plan.lower() != "default":
-                fallback_cmd += f" --plan='{plan}'"
+                fallback_cmd += f" --plan={q_plan}"
 
             if self.ssh_user != "root":
                 if self.ssh_password:
-                    escaped_sudo_pw = self.ssh_password.replace("'", "'\\''")
-                    fallback_cmd = f"echo '{escaped_sudo_pw}' | sudo -S " + fallback_cmd
+                    fallback_cmd = "sudo -S -p '' " + fallback_cmd
+                    sudo_stdin = self.ssh_password + "\n"
                 else:
                     fallback_cmd = "sudo -n " + fallback_cmd
-            
-            fb_code, fb_out, fb_err = self.ssh.execute(fallback_cmd)
+
+            fb_code, fb_out, fb_err = self.ssh.execute(fallback_cmd, stdin_data=sudo_stdin)
             if fb_code == 0 and ("Account Creation Complete" in fb_out or "WWWAcct" in fb_out):
                 handover_text = self.format_handover(
                     panel="cPanel",

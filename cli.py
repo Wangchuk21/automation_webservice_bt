@@ -10,6 +10,13 @@ from rich.table import Table
 from config import settings
 from provisioners.cpanel import CPanelProvisioner
 from provisioners.directadmin import DirectAdminProvisioner
+from provisioners.base import (
+    validate_domain,
+    validate_username,
+    validate_email,
+    validate_package,
+    ValidationError,
+)
 from notifier import send_customer_welcome_email, test_smtp_connection
 from nic_client import NICClient
 
@@ -62,16 +69,31 @@ def handle_test(args):
 
 
 def handle_create(args):
+    # Validate before any SSH connection is opened, so malformed input can never
+    # reach a remote shell. The CLI bypasses the API's pydantic validators.
+    try:
+        domain = validate_domain(args.domain)
+        username = validate_username(args.username) if args.username else None
+        email = validate_email(args.email) if args.email else None
+        package = validate_package(args.package) if args.package else None
+    except ValidationError as e:
+        console.print(Panel(
+            f"[bold red]Invalid input:[/bold red]\n{e}",
+            title="[red]Validation Error[/red]",
+            border_style="red"
+        ))
+        raise SystemExit(1)
+
     prov = get_provisioner(args.panel)
     mode_text = " [yellow](DRY RUN)[/yellow]" if args.dry_run else ""
-    console.print(f"\n[bold cyan]⚡ Provisioning user account for [white]{args.domain}[/white] on [yellow]{args.panel.upper()}[/yellow]{mode_text}...[/bold cyan]")
+    console.print(f"\n[bold cyan]⚡ Provisioning user account for [white]{domain}[/white] on [yellow]{args.panel.upper()}[/yellow]{mode_text}...[/bold cyan]")
     
     result = prov.create_account(
-        domain=args.domain,
-        username=args.username,
+        domain=domain,
+        username=username,
         password=args.password,
-        email=args.email,
-        package=args.package,
+        email=email,
+        package=package,
         dry_run=args.dry_run
     )
 

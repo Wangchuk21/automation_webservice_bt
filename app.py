@@ -4,7 +4,7 @@ from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional, Dict, Any
 import os
 from pathlib import Path
@@ -12,7 +12,15 @@ from pathlib import Path
 from config import settings
 from provisioners.cpanel import CPanelProvisioner
 from provisioners.directadmin import DirectAdminProvisioner
-from provisioners.base import generate_secure_password, sanitize_username
+from provisioners.base import (
+    generate_secure_password,
+    sanitize_username,
+    validate_domain,
+    validate_username,
+    validate_email,
+    validate_package,
+    ValidationError,
+)
 from notifier import send_customer_welcome_email, test_smtp_connection
 from nic_client import NICClient
 
@@ -78,6 +86,29 @@ class AccountCreateRequest(BaseModel):
     phone: Optional[str] = Field(None, description="Customer telephone for nic.bt.bt")
     address: Optional[str] = Field(None, description="Customer address for nic.bt.bt")
     dry_run: bool = Field(False, description="Simulate account creation without modifying remote server")
+
+    # Defence in depth against shell injection. The provisioners shlex.quote()
+    # everything they interpolate into a remote command; these reject malformed
+    # input before it ever reaches a provisioner or a live server.
+    @field_validator("domain")
+    @classmethod
+    def _check_domain(cls, v: str) -> str:
+        return validate_domain(v)
+
+    @field_validator("username")
+    @classmethod
+    def _check_username(cls, v: Optional[str]) -> Optional[str]:
+        return validate_username(v) if v else v
+
+    @field_validator("email")
+    @classmethod
+    def _check_email(cls, v: Optional[str]) -> Optional[str]:
+        return validate_email(v) if v else v
+
+    @field_validator("package")
+    @classmethod
+    def _check_package(cls, v: Optional[str]) -> Optional[str]:
+        return validate_package(v) if v else v
 
 
 @app.get("/", response_class=HTMLResponse)

@@ -77,12 +77,23 @@ class SSHExecutor:
             f"password authentication. Last error: {last_error}"
         )
 
-    def execute(self, command: str) -> Tuple[int, str, str]:
-        """Execute command and return (exit_code, stdout, stderr)."""
+    def execute(self, command: str, stdin_data: Optional[str] = None) -> Tuple[int, str, str]:
+        """
+        Execute command and return (exit_code, stdout, stderr).
+
+        stdin_data is written to the command's stdin channel. This is how the
+        sudo password is supplied: `sudo -S` reads it from stdin, so the
+        password never appears in the remote command line or process list, where
+        it was previously exposed by `echo '<pw>' | sudo -S ...`.
+        """
         client = None
         try:
             client = self._get_client()
             stdin, stdout, stderr = client.exec_command(command)
+            if stdin_data is not None:
+                stdin.write(stdin_data)
+                stdin.flush()
+            stdin.channel.shutdown_write()
             exit_code = stdout.channel.recv_exit_status()
             out_str = stdout.read().decode('utf-8', errors='replace').strip()
             err_str = stderr.read().decode('utf-8', errors='replace').strip()

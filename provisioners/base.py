@@ -5,6 +5,77 @@ from typing import Dict, Any, Optional
 from dataclasses import dataclass
 from jinja2 import Template
 
+
+# ---------------------------------------------------------------------------
+# Input validation
+#
+# These are defence in depth. The provisioners shlex.quote() everything they
+# interpolate into a remote shell, which is the actual guarantee; these
+# validators reject obviously-malformed input early, before it reaches a
+# provisioner or a live server.
+# ---------------------------------------------------------------------------
+
+# A domain label: alphanumeric, inner hyphens, 1-63 chars, at least two labels.
+DOMAIN_RE = re.compile(
+    r"^(?=.{4,253}$)"
+    r"(?!-)[a-z0-9-]{1,63}(?<!-)(\.(?!-)[a-z0-9-]{1,63}(?<!-))+$"
+)
+
+# cPanel/DA usernames: lowercase alphanumerics, optionally with a single inner
+# hyphen or underscore. Must start with a letter.
+USERNAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,15}$")
+
+# Intentionally conservative: one @, no whitespace, no shell metacharacters.
+EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,255}\.[A-Za-z]{2,24}$")
+
+# Plan/package names as exposed by whmapi1 listpkgs / DA package lists.
+PACKAGE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
+
+
+class ValidationError(ValueError):
+    """Raised when a provisioning input fails validation."""
+
+
+def validate_domain(domain: str) -> str:
+    """Return a normalised domain, or raise ValidationError."""
+    value = (domain or "").strip().lower().rstrip(".")
+    if not DOMAIN_RE.match(value):
+        raise ValidationError(
+            f"Invalid domain '{domain}'. Expected a real hostname such as "
+            f"'clientdomain.bt' (letters, digits, hyphens and dots only)."
+        )
+    return value
+
+
+def validate_username(username: str) -> str:
+    """Return a normalised username, or raise ValidationError."""
+    value = (username or "").strip().lower()
+    if not USERNAME_RE.match(value):
+        raise ValidationError(
+            f"Invalid username '{username}'. Use 1-16 characters: a leading letter "
+            f"followed by letters, digits, hyphen or underscore."
+        )
+    return value
+
+
+def validate_email(email: str) -> str:
+    """Return a trimmed email, or raise ValidationError."""
+    value = (email or "").strip()
+    if not EMAIL_RE.match(value):
+        raise ValidationError(f"Invalid email address '{email}'.")
+    return value
+
+
+def validate_package(package: str) -> str:
+    """Return a trimmed package/plan name, or raise ValidationError."""
+    value = (package or "").strip()
+    if not PACKAGE_RE.match(value):
+        raise ValidationError(
+            f"Invalid package/plan '{package}'. Use letters, digits, dot, "
+            f"hyphen or underscore only."
+        )
+    return value
+
 @dataclass
 class ProvisionerResult:
     success: bool
