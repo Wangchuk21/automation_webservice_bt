@@ -1,6 +1,7 @@
 import secrets
 import string
 import re
+from datetime import date
 from typing import Dict, Any, Optional
 from dataclasses import dataclass
 from jinja2 import Template
@@ -73,6 +74,54 @@ def validate_package(package: str) -> str:
         raise ValidationError(
             f"Invalid package/plan '{package}'. Use letters, digits, dot, "
             f"hyphen or underscore only."
+        )
+    return value
+
+
+# nic.bt.bt requires a postal code on the domain record, so "-" is not accepted.
+POSTAL_CODE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 -]{0,15}$")
+
+# ISO 3166-1 alpha-2, e.g. BT
+COUNTRY_RE = re.compile(r"^[A-Za-z]{2}$")
+
+RENEWAL_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def validate_postal_code(postal_code: str) -> str:
+    """Return a trimmed postal code, or raise ValidationError."""
+    value = (postal_code or "").strip()
+    if not POSTAL_CODE_RE.match(value):
+        raise ValidationError(
+            f"Invalid postal code '{postal_code}'. Use letters, digits, spaces "
+            f"or hyphens, up to 16 characters."
+        )
+    return value
+
+
+def validate_country(country: str) -> str:
+    """Return an upper-cased ISO country code, or raise ValidationError."""
+    value = (country or "").strip().upper()
+    if not COUNTRY_RE.match(value):
+        raise ValidationError(
+            f"Invalid country '{country}'. Use a 2-letter ISO code, e.g. BT."
+        )
+    return value
+
+
+def validate_renewal_date(renewal_date: str) -> str:
+    """Return a YYYY-MM-DD renewal date that is a real calendar date."""
+    value = (renewal_date or "").strip()
+    if not RENEWAL_DATE_RE.match(value):
+        raise ValidationError(
+            f"Invalid renewal date '{renewal_date}'. Expected YYYY-MM-DD, "
+            f"e.g. 2027-09-26."
+        )
+    try:
+        year, month, day = (int(p) for p in value.split("-"))
+        date(year, month, day)
+    except ValueError:
+        raise ValidationError(
+            f"Invalid renewal date '{renewal_date}': that calendar date does not exist."
         )
     return value
 

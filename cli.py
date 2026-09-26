@@ -15,6 +15,9 @@ from provisioners.base import (
     validate_username,
     validate_email,
     validate_package,
+    validate_postal_code,
+    validate_country,
+    validate_renewal_date,
     ValidationError,
 )
 from notifier import send_customer_welcome_email, test_smtp_connection
@@ -199,14 +202,40 @@ def handle_whois(args):
 
 
 def handle_register_domain(args):
-    console.print(f"\n[bold cyan]Submitting domain to nic.bt.bt: [white]{args.domain}[/white]...[/bold cyan]")
+    try:
+        domain = validate_domain(args.domain)
+        name = args.name.strip()
+        email = validate_email(args.email)
+        postal = validate_postal_code(args.postal_code) if args.postal_code else None
+        country = validate_country(args.country) if args.country else "BT"
+        renewal = validate_renewal_date(args.renewal_date) if args.renewal_date else None
+    except ValidationError as e:
+        console.print(Panel(
+            f"[bold red]Invalid input:[/bold red]\n{e}",
+            title="[red]Validation Error[/red]",
+            border_style="red"
+        ))
+        raise SystemExit(1)
+
+    if not postal:
+        console.print(Panel(
+            "[bold yellow]Note:[/bold yellow] no --postal-code given. nic.bt.bt marks the\n"
+            "postal code as required on the domain form, so this may be rejected.",
+            title="[yellow]Warning[/yellow]",
+            border_style="yellow"
+        ))
+
+    console.print(f"\n[bold cyan]Submitting domain to nic.bt.bt: [white]{domain}[/white]...[/bold cyan]")
     nic = NICClient()
     res = nic.register_or_update_domain(
-        domain=args.domain,
-        customer_name=args.name,
-        email=args.email,
+        domain=domain,
+        customer_name=name,
+        email=email,
         phone=args.phone or "+975",
-        address=args.address or "Thimphu, Bhutan"
+        address=args.address or "Thimphu, Bhutan",
+        postalcode=postal or "-",
+        country=country,
+        reg_date=renewal,
     )
     if res.get("success"):
         console.print(f"[bold green]✓ SUCCESS:[/bold green] {res.get('message')}")
@@ -244,6 +273,9 @@ def main():
     reg_parser.add_argument("--email", required=True, help="Customer contact email")
     reg_parser.add_argument("--phone", default="+975", help="Customer telephone")
     reg_parser.add_argument("--address", default="Thimphu, Bhutan", help="Customer address")
+    reg_parser.add_argument("--postal-code", help="Customer postal code (required by nic.bt.bt)")
+    reg_parser.add_argument("--country", default="BT", help="2-letter ISO country code")
+    reg_parser.add_argument("--renewal-date", help="Domain renewal date, YYYY-MM-DD (default: today)")
     reg_parser.set_defaults(func=handle_register_domain)
 
     # Create command

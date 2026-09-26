@@ -19,6 +19,9 @@ from provisioners.base import (
     validate_username,
     validate_email,
     validate_package,
+    validate_postal_code,
+    validate_country,
+    validate_renewal_date,
     ValidationError,
 )
 from notifier import send_customer_welcome_email, test_smtp_connection
@@ -85,6 +88,9 @@ class AccountCreateRequest(BaseModel):
     customer_name: Optional[str] = Field(None, description="Customer or organization name for nic.bt.bt")
     phone: Optional[str] = Field(None, description="Customer telephone for nic.bt.bt")
     address: Optional[str] = Field(None, description="Customer address for nic.bt.bt")
+    postal_code: Optional[str] = Field(None, description="Customer postal code for nic.bt.bt (required by the registry form)")
+    country: Optional[str] = Field(None, description="Customer country code for nic.bt.bt")
+    renewal_date: Optional[str] = Field(None, description="Domain renewal date for nic.bt.bt, YYYY-MM-DD")
     dry_run: bool = Field(False, description="Simulate account creation without modifying remote server")
 
     # Defence in depth against shell injection. The provisioners shlex.quote()
@@ -109,6 +115,21 @@ class AccountCreateRequest(BaseModel):
     @classmethod
     def _check_package(cls, v: Optional[str]) -> Optional[str]:
         return validate_package(v) if v else v
+
+    @field_validator("postal_code")
+    @classmethod
+    def _check_postal_code(cls, v: Optional[str]) -> Optional[str]:
+        return validate_postal_code(v) if v else v
+
+    @field_validator("country")
+    @classmethod
+    def _check_country(cls, v: Optional[str]) -> Optional[str]:
+        return validate_country(v) if v else v
+
+    @field_validator("renewal_date")
+    @classmethod
+    def _check_renewal_date(cls, v: Optional[str]) -> Optional[str]:
+        return validate_renewal_date(v) if v else v
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -217,6 +238,17 @@ async def create_account(payload: AccountCreateRequest):
 
     nic_status = None
     if payload.register_nic:
+        if not payload.postal_code:
+            # nic.bt.bt marks postal code as required on the domain form. Fail
+            # here with a clear message rather than submitting "-" and getting an
+            # opaque rejection from the registry after the account is created.
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "postal_code is required to register a domain on nic.bt.bt. "
+                    "Supply the customer's postal code, or untick the registry option."
+                ),
+            )
         if payload.dry_run:
             # Report the skip explicitly; returning None makes the dashboard
             # show nothing at all, which reads as "silently ignored".
@@ -236,7 +268,10 @@ async def create_account(payload: AccountCreateRequest):
                 customer_name=payload.customer_name or result.username,
                 email=payload.email or settings.SMTP_FROM_EMAIL,
                 phone=payload.phone or "+975",
-                address=payload.address or "Thimphu, Bhutan"
+                address=payload.address or "Thimphu, Bhutan",
+                postalcode=payload.postal_code,
+                country=payload.country or "BT",
+                reg_date=payload.renewal_date,
             )
 
     return {
@@ -274,6 +309,34 @@ class DomainRegisterRequest(BaseModel):
     email: str
     phone: Optional[str] = "+975"
     address: Optional[str] = "Thimphu, Bhutan"
+    postal_code: Optional[str] = None
+    country: Optional[str] = "BT"
+    renewal_date: Optional[str] = None
+
+    @field_validator("domain")
+    @classmethod
+    def _check_domain(cls, v: str) -> str:
+        return validate_domain(v)
+
+    @field_validator("email")
+    @classmethod
+    def _check_email(cls, v: str) -> str:
+        return validate_email(v)
+
+    @field_validator("postal_code")
+    @classmethod
+    def _check_postal_code(cls, v: Optional[str]) -> Optional[str]:
+        return validate_postal_code(v) if v else v
+
+    @field_validator("country")
+    @classmethod
+    def _check_country(cls, v: Optional[str]) -> Optional[str]:
+        return validate_country(v) if v else v
+
+    @field_validator("renewal_date")
+    @classmethod
+    def _check_renewal_date(cls, v: Optional[str]) -> Optional[str]:
+        return validate_renewal_date(v) if v else v
 
 
 @app.post("/api/v1/nic/register")
@@ -285,6 +348,9 @@ async def register_nic_domain(payload: DomainRegisterRequest):
         customer_name=payload.customer_name,
         email=payload.email,
         phone=payload.phone or "+975",
-        address=payload.address or "Thimphu, Bhutan"
+        address=payload.address or "Thimphu, Bhutan",
+        postalcode=payload.postal_code or "-",
+        country=payload.country or "BT",
+        reg_date=payload.renewal_date,
     )
     return res

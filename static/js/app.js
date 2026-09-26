@@ -223,9 +223,21 @@ async function handleProvisionSubmit(e) {
   const customerName = (document.getElementById("customer_name") || {}).value || "";
   const phone = (document.getElementById("phone") || {}).value || "";
   const address = (document.getElementById("address") || {}).value || "";
+  const postalCode = (document.getElementById("postal_code") || {}).value || "";
+  const country = (document.getElementById("country") || {}).value || "";
+  const renewalDate = (document.getElementById("renewal_date") || {}).value || "";
 
   if (!domain) {
     showToast("Please enter a domain name.", "error");
+    return;
+  }
+
+  // nic.bt.bt marks the postal code as required on the domain form, so catch it
+  // here for instant feedback rather than after a round-trip to the registry.
+  if (registerNic && !postalCode.trim()) {
+    showToast("Postal code is required to register the domain on nic.bt.bt.", "error");
+    const el = document.getElementById("postal_code");
+    if (el) { el.focus(); el.style.borderColor = "var(--accent-rose)"; }
     return;
   }
 
@@ -255,6 +267,9 @@ async function handleProvisionSubmit(e) {
         customer_name: customerName || null,
         phone: phone || null,
         address: address || null,
+        postal_code: postalCode || null,
+        country: country || null,
+        renewal_date: renewalDate || null,
         dry_run: dryRun
       })
     });

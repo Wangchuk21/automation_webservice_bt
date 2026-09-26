@@ -203,6 +203,29 @@
               </div>
               <span class="form-hint">Defaults to "Thimphu, Bhutan" and +975 if left blank.</span>
             </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label for="postal_code" class="form-label">Postal Code <span class="required">*</span></label>
+                <div class="input-wrapper">
+                  <input type="text" id="postal_code" name="postal_code" placeholder="e.g. 11002" maxlength="16">
+                </div>
+                <span class="form-hint">Required by the nic.bt.bt domain form.</span>
+              </div>
+              <div class="form-group">
+                <label for="country" class="form-label">Country Code</label>
+                <div class="input-wrapper">
+                  <input type="text" id="country" name="country" placeholder="BT" value="BT" maxlength="2">
+                </div>
+                <span class="form-hint">2-letter ISO code.</span>
+              </div>
+            </div>
+            <div class="form-group">
+              <label for="renewal_date" class="form-label">Domain Renewal Date</label>
+              <div class="input-wrapper">
+                <input type="date" id="renewal_date" name="renewal_date">
+              </div>
+              <span class="form-hint">Leave blank to use today's date. Registrations are normally renewed annually.</span>
+            </div>
           </div>
 
           <!-- Action Buttons -->
