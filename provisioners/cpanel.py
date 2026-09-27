@@ -408,6 +408,126 @@ class CPanelProvisioner(BaseProvisioner):
             logger.warning(f"Existence check for '{username}' failed: {e}")
             return False
 
+    def account_state(self, username: str) -> Optional[Dict[str, Any]]:
+        """
+        Current suspension state of a single account, read from listaccts.
+
+        Read-only. Returns None when the account does not exist. This is the
+        authoritative pre-check the suspension rules depend on: it is what
+        distinguishes "already suspended for billing" (skip) from "suspended
+        for abuse" (skip, and do not rewrite the reason) from "not suspended"
+        (the only state in which suspension is allowed).
+        """
+        if not username or not re.match(r'^[a-z][a-z0-9]*$', username):
+            raise ValidationError(f"Invalid cPanel username: {username!r}")
+        for acct in self.list_accounts():
+            if acct["username"] == username:
+                return acct
+        return None
+
+    def list_accounts(self) -> list:
+        """
+        Every hosting account, with its domain and current suspension state.
+
+        Read-only. This is the work list for suspension: it is complete and
+        authoritative for the accounts this panel manages, unlike enumerating
+        from the billing system, which cannot be paged through.
+        """
+        cmd = "whmapi1 --output=json listaccts"
+        sudo_stdin = None
+        if self.ssh_user != "root":
+            if self.ssh_password:
+                cmd = "sudo -S -p '' " + cmd
+                sudo_stdin = self.ssh_password + "\n"
+            else:
+                cmd = "sudo -n " + cmd
+        try:
+            code, stdout, stderr = self.ssh.execute(cmd, stdin_data=sudo_stdin)
+            clean = "\n".join(l for l in stdout.splitlines() if not l.startswith("[sudo]")).strip()
+            accts = json.loads(clean)["data"]["acct"]
+        except Exception as e:
+            logger.error(f"list_accounts failed: {e}")
+            return []
+
+        out = []
+        for a in accts:
+            out.append({
+                "panel": "cpanel",
+                "username": a.get("user", ""),
+                "domain": (a.get("domain") or "").strip().lower(),
+                # listaccts reports these as strings; coerce defensively.
+                "suspended": str(a.get("suspended", "0")).strip() in ("1", "yes", "true"),
+                "reason": (a.get("suspendreason") or "").strip(),
+                "suspend_time": a.get("suspendtime") or "",
+            })
+        return out
+
+    def suspend_account(
+        self,
+        username: str,
+        reason: str = "billing",
+        confirm: bool = False
+    ) -> Dict[str, Any]:
+        """
+        Suspend a hosting account, stopping the website.
+
+        Unlike removal, suspension is reversible (whmapi1 unsuspendacct), but it
+        still takes a live site offline, so it is gated on confirm=True and
+        refuses to touch an account that is already suspended -- overwriting the
+        reason would destroy the record of why it was suspended (abuse, spam and
+        so on are not billing).
+
+        The reason is recorded in the server audit log.
+        """
+        if not confirm:
+            return {"success": False,
+                    "message": "Refusing to suspend without confirm=True."}
+        if not username or not re.match(r'^[a-z][a-z0-9]*$', username):
+            return {"success": False, "message": f"Invalid cPanel username: {username!r}"}
+
+        state = self.account_state(username)
+        if state is None:
+            return {"success": False,
+                    "message": f"Account '{username}' does not exist on {self.host}."}
+        if state["suspended"]:
+            return {"success": False, "already_suspended": True,
+                    "message": f"'{username}' is already suspended "
+                               f"(reason: {state['reason'] or 'not recorded'}). Left untouched."}
+
+        cmd = (f"whmapi1 --output=json suspendacct "
+               f"user={shlex.quote(username)} reason={shlex.quote(reason)}")
+        sudo_stdin = None
+        if self.ssh_user != "root":
+            if self.ssh_password:
+                cmd = "sudo -S -p '' " + cmd
+                sudo_stdin = self.ssh_password + "\n"
+            else:
+                cmd = "sudo -n " + cmd
+        try:
+            code, stdout, stderr = self.ssh.execute(cmd, stdin_data=sudo_stdin)
+        except Exception as e:
+            return {"success": False, "message": f"SSH execution failed: {e}"}
+
+        clean = "\n".join(l for l in stdout.splitlines() if not l.startswith("[sudo]")).strip()
+        # whmapi1 reports failure in JSON with exit code 0, so parse the result
+        # rather than trusting the exit status.
+        if clean:
+            try:
+                meta = json.loads(clean).get("metadata", {})
+                if str(meta.get("result")) == "0":
+                    return {"success": False,
+                            "message": f"suspendacct failed: {meta.get('reason', clean[:200])}"}
+            except json.JSONDecodeError:
+                pass
+
+        after = self.account_state(username)
+        if after is None or not after["suspended"]:
+            return {"success": False,
+                    "message": f"suspendacct reported no error but '{username}' is not suspended."}
+        return {"success": True,
+                "message": f"Suspended '{username}' on {self.host}. Reason: {reason}",
+                "raw_response": clean}
+
     def delete_account(
         self,
         username: str,

@@ -255,6 +255,125 @@ class DirectAdminProvisioner(BaseProvisioner):
         except Exception:
             return ["Bronze", "SILVER", "Gold", "PLATINUM", "default"]
 
+    def list_accounts(self) -> list:
+        """
+        Every hosting account with its domain and current suspension state.
+
+        Read-only, via the DirectAdmin API -- the same HTTP interface the web
+        GUI uses. This is the work list for suspension.
+
+        The `suspended` and `suspended_reason` fields are what make this
+        usable: DirectAdmin distinguishes billing suspensions from abuse, spam
+        and bandwidth suspensions, and conflating them would mean rewriting
+        the reason on a case that was shut off for abuse.
+        """
+        if not self.api_password:
+            logger.error("list_accounts needs DIRECTADMIN_API_PASSWORD.")
+            return []
+        try:
+            base = api_base_url(self.host, self.tls_hostname, 2222)
+            resp = requests.get(f"{base}/CMD_API_SHOW_USERS",
+                                auth=(self.api_user, self.api_password),
+                                verify=resolve_verify(), timeout=60)
+            users = urllib.parse.parse_qs(resp.text, keep_blank_values=True).get("list[]", [])
+        except Exception as e:
+            logger.error(f"CMD_API_SHOW_USERS failed: {e}")
+            return []
+
+        out = []
+        for u in users:
+            cfg = self.account_state(u)
+            if cfg:
+                out.append(cfg)
+        return out
+
+    def account_state(self, username: str) -> Optional[Dict[str, Any]]:
+        """
+        Current state of a single account: domain, suspended, reason.
+
+        Read-only. Returns None if the account cannot be read. This is the
+        authoritative pre-check the suspension rules depend on.
+        """
+        if not username or not re.match(r'^[a-zA-Z0-9][a-zA-Z0-9_\-]*$', username):
+            raise ValidationError(f"Invalid DirectAdmin username: {username!r}")
+        try:
+            base = api_base_url(self.host, self.tls_hostname, 2222)
+            resp = requests.get(f"{base}/CMD_API_SHOW_USER_CONFIG",
+                                auth=(self.api_user, self.api_password),
+                                params={"user": username},
+                                verify=resolve_verify(), timeout=30)
+            data = urllib.parse.parse_qs(resp.text, keep_blank_values=True)
+        except Exception as e:
+            logger.warning(f"account_state('{username}') failed: {e}")
+            return None
+        if data.get("error", [""])[0] not in ("", "0"):
+            return None
+        return {
+            "panel": "directadmin",
+            "username": username,
+            "domain": (data.get("domain", [""])[0] or "").strip().lower(),
+            "suspended": (data.get("suspended", ["no"])[0] or "no").strip().lower() == "yes",
+            "reason": (data.get("suspended_reason", [""])[0] or "").strip(),
+            "suspend_time": (data.get("suspend_date", [""])[0] or "").strip(),
+        }
+
+    def suspend_account(
+        self,
+        username: str,
+        reason: str = "billing",
+        confirm: bool = False
+    ) -> Dict[str, Any]:
+        """
+        Suspend a DirectAdmin account via CMD_API_MODIFY_USER.
+
+        Refuses without confirm=True, and refuses when the account is already
+        suspended so that an existing reason -- abuse, spam, user_bandwidth --
+        is never overwritten with "billing". Overwriting would destroy the
+        only record of why a customer was shut off.
+
+        Returns success=False with already_suspended=True when the account was
+        left alone for that reason, so callers can distinguish "did nothing on
+        purpose" from "failed".
+        """
+        if not confirm:
+            return {"success": False, "message": "Refusing to suspend without confirm=True."}
+        if not username or not re.match(r'^[a-zA-Z0-9][a-zA-Z0-9_\-]*$', username):
+            return {"success": False, "message": f"Invalid DirectAdmin username: {username!r}"}
+
+        state = self.account_state(username)
+        if state is None:
+            return {"success": False,
+                    "message": f"Account '{username}' could not be read on {self.host}."}
+        if state["suspended"]:
+            return {"success": False, "already_suspended": True,
+                    "message": f"'{username}' is already suspended "
+                               f"(reason: {state['reason'] or 'not recorded'}). Left untouched."}
+
+        try:
+            base = api_base_url(self.host, self.tls_hostname, 2222)
+            resp = requests.get(f"{base}/CMD_API_MODIFY_USER",
+                                auth=(self.api_user, self.api_password),
+                                params={"user": username,
+                                        "suspended": "yes",
+                                        "suspended_reason": reason},
+                                verify=resolve_verify(), timeout=60)
+        except Exception as e:
+            return {"success": False, "message": f"API request failed: {e}"}
+
+        data = urllib.parse.parse_qs(resp.text, keep_blank_values=True)
+        if data.get("error", ["0"])[0] not in ("", "0"):
+            return {"success": False,
+                    "message": f"CMD_API_MODIFY_USER failed: "
+                               f"{(data.get('text') or ['error'])[0][:200]}"}
+
+        after = self.account_state(username)
+        if after is None or not after["suspended"]:
+            return {"success": False,
+                    "message": f"Modify reported no error but '{username}' is not suspended. "
+                               "The suspended parameter may not be what this version expects."}
+        return {"success": True,
+                "message": f"Suspended '{username}' on {self.host}. Reason: {reason}"}
+
     def account_exists(self, username: str) -> bool:
         """
         Read-only check for whether a DirectAdmin account exists.

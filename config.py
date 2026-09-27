@@ -138,6 +138,11 @@ class Config:
     # the letter, so JPEG is allowed alongside it.
     SURRENDER_ALLOWED_EXTENSIONS: str = os.getenv("SURRENDER_ALLOWED_EXTENSIONS", ".pdf,.jpg,.jpeg")
 
+    # --- Automated suspension ---
+    # Kept separate from the surrender audit: the record shapes differ, and
+    # mixing them in one file would make both harder to read.
+    SUSPENSION_AUDIT_LOG: str = os.getenv("SUSPENSION_AUDIT_LOG", "./data/suspension_audit.jsonl")
+
     # --- Ericsson BSCS / CBiO CX (read-only reference) ---
     # STRICTLY READ-ONLY. We have no rights to write to BSCS, so this client
     # deliberately exposes no activate/deactivate/contract-modifying method.

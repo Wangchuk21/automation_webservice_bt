@@ -1,0 +1,270 @@
+"""
+Tests for the suspension decision logic.
+
+These are the tests that matter most in this repository. The rules here decide
+whether a live customer's website gets switched off, so each one is written to
+fail loudly if the policy is weakened:
+
+  * an account already suspended for a non-billing reason is never touched
+  * an existing reason is never overwritten
+  * absence of a billing match never becomes a suspension
+  * an incomplete billing list aborts the whole run
+  * a panel with no handler aborts rather than being skipped
+
+decide() is pure, so none of this needs a server. Run with:
+    ./venv/bin/python -m unittest discover -s tests -v
+"""
+import sys
+import unittest
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from suspension import (
+    SKIP_ACTIVE, SKIP_ALREADY_BILLING, SKIP_NO_MATCH, SKIP_OTHER_REASON,
+    SUSPEND, SuspensionError, decide, execute, extract_domains, is_billing_reason,
+)
+
+
+def acct(panel="cpanel", username="u", domain="d.bt", suspended=False, reason=""):
+    return {"panel": panel, "username": username, "domain": domain,
+            "suspended": suspended, "reason": reason}
+
+
+def lapsed(domains, complete=True, note=""):
+    return {
+        "domains": set(domains),
+        "complete": complete,
+        "note": note,
+        "rows": [{"contract": "CONTR1", "customer_code": "c", "public_key": "k",
+                  "name_field": ",".join(domains), "domains": list(domains)}],
+    }
+
+
+class TestDomainExtraction(unittest.TestCase):
+    def test_repeated_www_tokens_deduplicate(self):
+        self.assertEqual(extract_domains("www.test.bt, www.test.bt, www.test.bt"), ["test.bt"])
+
+    def test_mixed_with_person_name(self):
+        self.assertEqual(extract_domains("Dorji Bhutan, --, www.test.bt"), ["test.bt"])
+
+    def test_person_name_yields_nothing(self):
+        self.assertEqual(extract_domains("Jamtsho, Karma"), [])
+        self.assertEqual(extract_domains(""), [])
+        self.assertEqual(extract_domains("   "), [])
+
+    def test_unknown_tld_rejected(self):
+        # Not a .bt domain, so it must not become a suspension target.
+        self.assertEqual(extract_domains("www.example.com"), [])
+
+    def test_known_bt_suffixes_accepted(self):
+        for d in ("wons.bt", "x.com.bt", "x.org.bt", "x.edu.bt", "x.gov.bt"):
+            self.assertEqual(extract_domains(f"www.{d}"), [d], d)
+
+    def test_placeholders_rejected(self):
+        for junk in ("--", "null", "N/A", "-"):
+            self.assertEqual(extract_domains(junk), [])
+
+
+class TestBillingReasonClassification(unittest.TestCase):
+    def test_known_billing_reasons(self):
+        for panel, reason in [("cpanel", "pending bills"), ("cpanel", "1 year pending bill"),
+                              ("cpanel", "billing issue"), ("cpanel", "Payment due"),
+                              ("directadmin", "billing")]:
+            self.assertTrue(is_billing_reason(panel, reason), f"{panel}/{reason}")
+
+    def test_non_billing_reasons(self):
+        for panel, reason in [("directadmin", "abuse"), ("directadmin", "spam"),
+                              ("directadmin", "user_bandwidth"), ("cpanel", "compromised"),
+                              ("cpanel", "forwarding"), ("cpanel", "Surrendered"),
+                              ("cpanel", "forwarded")]:
+            self.assertFalse(is_billing_reason(panel, reason), f"{panel}/{reason}")
+
+    def test_unknown_reason_is_not_billing(self):
+        """Fail safe: an unrecognised reason must never be treated as billing."""
+        for reason in ("banana", "mystery", "2026", "x" * 200):
+            self.assertFalse(is_billing_reason("cpanel", reason), reason)
+            self.assertFalse(is_billing_reason("directadmin", reason), reason)
+
+    def test_active_sentinels_are_not_reasons(self):
+        for s in ("", "not suspended", "none", "null", "NOT SUSPENDED"):
+            self.assertFalse(is_billing_reason("cpanel", s), s)
+
+    def test_case_insensitive(self):
+        self.assertTrue(is_billing_reason("cpanel", "PENDING BILLS"))
+        self.assertTrue(is_billing_reason("directadmin", "Billing"))
+
+
+class TestDecisionMatrix(unittest.TestCase):
+    def test_active_and_lapsed_is_suspended(self):
+        r = decide([acct(domain="test.bt")], lapsed(["test.bt"]))
+        self.assertEqual(r.decisions[0].action, SUSPEND)
+        self.assertTrue(r.decisions[0].will_suspend)
+
+    def test_active_and_billing_ok_is_skipped(self):
+        r = decide([acct(domain="ok.bt")], lapsed(["other.bt"]))
+        self.assertEqual(r.decisions[0].action, SKIP_NO_MATCH)
+        self.assertFalse(r.decisions[0].will_suspend)
+
+    def test_www_prefix_matches_on_either_side(self):
+        """BSCS stores "www.test.bt" while panels report "test.bt". Both
+        orderings must match, and the account side must be normalised too."""
+        r1 = decide([acct(domain="test.bt")], lapsed(["www.test.bt"]))
+        self.assertEqual(r1.decisions[0].action, SUSPEND)
+        r2 = decide([acct(domain="www.test.bt")], lapsed(["test.bt"]))
+        self.assertEqual(r2.decisions[0].action, SUSPEND)
+
+    def test_normalise_domain(self):
+        from suspension import normalise_domain
+        self.assertEqual(normalise_domain("  WWW.Test.BT "), "test.bt")
+        self.assertEqual(normalise_domain('"test.bt"'), "test.bt")
+        self.assertEqual(normalise_domain(""), "")
+        self.assertEqual(normalise_domain(None), "")
+
+    def test_already_suspended_for_billing_is_skipped(self):
+        a = acct(domain="test.bt", suspended=True, reason="pending bills")
+        r = decide([a], lapsed(["test.bt"]))
+        self.assertEqual(r.decisions[0].action, SKIP_ALREADY_BILLING)
+        self.assertFalse(r.decisions[0].will_suspend)
+
+    def test_abuse_case_is_never_suspended_even_if_billing_lapsed(self):
+        """The headline rule: an abuse suspension is left completely alone."""
+        a = acct(domain="test.bt", suspended=True, reason="abuse")
+        r = decide([a], lapsed(["test.bt"]))
+        self.assertEqual(r.decisions[0].action, SKIP_OTHER_REASON)
+        self.assertFalse(r.decisions[0].will_suspend)
+
+    def test_every_non_billing_reason_is_untouched(self):
+        for reason in ("abuse", "spam", "user_bandwidth", "compromised",
+                       "forwarding", "forwarded", "Surrendered", "", "Unknown"):
+            a = acct(domain="test.bt", suspended=True, reason=reason)
+            r = decide([a], lapsed(["test.bt"]))
+            self.assertFalse(r.decisions[0].will_suspend,
+                             f"reason {reason!r} must not be re-suspended")
+
+    def test_account_with_no_domain_is_never_suspended(self):
+        r = decide([acct(domain="")], lapsed(["test.bt"]))
+        self.assertFalse(r.decisions[0].will_suspend)
+
+    def test_suspended_account_is_not_even_matched_against_billing(self):
+        """Billing is only consulted for accounts that are not suspended."""
+        a = acct(domain="test.bt", suspended=True, reason="abuse")
+        r = decide([a], lapsed([]))
+        self.assertEqual(r.decisions[0].action, SKIP_OTHER_REASON)
+
+    def test_multiple_domains_from_one_contract(self):
+        r = decide([acct(domain="a.bt"), acct(domain="b.bt"), acct(domain="c.bt")],
+                   lapsed(["a.bt", "b.bt"]))
+        actions = [d.action for d in r.decisions]
+        self.assertEqual(actions, [SUSPEND, SUSPEND, SKIP_NO_MATCH])
+
+    def test_incomplete_list_is_flagged_but_decisions_still_made(self):
+        """decide() reports; execute() is what refuses. Separation matters."""
+        r = decide([acct(domain="test.bt")], lapsed(["test.bt"], complete=False, note="capped"))
+        self.assertFalse(r.bscs_complete)
+        self.assertEqual(r.bscs_note, "capped")
+
+    def test_counts(self):
+        accounts = [
+            acct(username="a", domain="a.bt"),
+            acct(username="b", domain="b.bt", suspended=True, reason="abuse"),
+            acct(username="c", domain="c.bt", suspended=True, reason="billing"),
+            acct(username="d", domain="d.bt"),
+        ]
+        r = decide(accounts, lapsed(["a.bt", "b.bt", "c.bt"]))
+        counts = r.counts()
+        self.assertEqual(counts[SUSPEND], 1)
+        self.assertEqual(counts[SKIP_OTHER_REASON], 1)
+        self.assertEqual(counts[SKIP_ALREADY_BILLING], 1)
+        self.assertEqual(counts[SKIP_NO_MATCH], 1)
+
+
+class TestExecutionGuards(unittest.TestCase):
+    def test_incomplete_billing_list_refuses_to_run(self):
+        """The single most important guard in this module."""
+        r = decide([acct(domain="test.bt")], lapsed(["test.bt"], complete=False, note="25 of 63"))
+        handler = lambda u, reason: {"success": True}  # noqa: E731
+        with self.assertRaises(SuspensionError) as ctx:
+            execute(r, {"cpanel": handler}, dry_run=False)
+        self.assertIn("incomplete", str(ctx.exception).lower())
+
+    def test_missing_handler_aborts_rather_than_skipping(self):
+        """A panel we cannot act on must stop the run, not be quietly missed."""
+        r = decide([acct(panel="directadmin", domain="test.bt")], lapsed(["test.bt"]))
+        with self.assertRaises(SuspensionError) as ctx:
+            execute(r, {"cpanel": lambda u, reason: {"success": True}}, dry_run=False)
+        self.assertIn("no suspension handler", str(ctx.exception).lower())
+
+    def test_dry_run_calls_no_handler(self):
+        called = []
+
+        def handler(u, reason):
+            called.append(u)
+            return {"success": True}
+
+        r = decide([acct(username="x", domain="test.bt")], lapsed(["test.bt"]))
+        out = execute(r, {"cpanel": handler}, dry_run=True)
+        self.assertEqual(called, [], "dry run must not touch anything")
+        self.assertTrue(out["dry_run"])
+        self.assertEqual(out["results"][0]["action"], "would_suspend")
+
+    def test_live_run_suspends_only_decided_accounts(self):
+        called = []
+        r = decide([acct(username="x", domain="a.bt"), acct(username="y", domain="b.bt")],
+                   lapsed(["a.bt"]))
+        out = execute(r, {"cpanel": lambda u, reason: called.append(u) or {"success": True}},
+                      dry_run=False)
+        self.assertEqual(called, ["x"])
+        self.assertEqual(len(out["results"]), 1)
+
+    def test_handler_failure_is_reported_not_swallowed(self):
+        r = decide([acct(username="x", domain="a.bt")], lapsed(["a.bt"]))
+        out = execute(r, {"cpanel": lambda u, reason: {"success": False, "message": "boom"}},
+                      dry_run=False)
+        self.assertFalse(out["results"][0]["success"])
+        self.assertEqual(out["results"][0]["action"], "suspend_failed")
+        self.assertIn("boom", out["results"][0]["message"])
+
+    def test_already_suspended_from_handler_is_flagged(self):
+        """Defence in depth: if the account got suspended between decide() and
+        execute(), the handler's refusal must be visible, not counted as success."""
+        r = decide([acct(username="x", domain="a.bt")], lapsed(["a.bt"]))
+        out = execute(r, {"cpanel": lambda u, reason: {
+            "success": False, "already_suspended": True, "message": "already suspended"}},
+            dry_run=False)
+        self.assertFalse(out["results"][0]["success"])
+        self.assertTrue(out["results"][0]["already_suspended"])
+
+
+class TestRealWorldScenarios(unittest.TestCase):
+    """Scenarios taken from the actual dry run against the live systems."""
+
+    def test_nissan_bhutan_scenario(self):
+        """Active on cPanel, lapsed in BSCS, and a genuine suspension target."""
+        accounts = [acct(panel="cpanel", username="nissanbhutan", domain="nissanbhutan.bt")]
+        result = decide(accounts, lapsed(["nissanbhutan.bt"]))
+        self.assertTrue(result.decisions[0].will_suspend)
+
+    def test_jamtsho_karma_cannot_be_matched_and_is_not_suspended(self):
+        """A lapsed contract with only a person's name yields no domain, so
+        nothing is suspended. This is the known blind spot."""
+        lapsed_result = {
+            "domains": set(), "complete": True, "note": "",
+            "rows": [{"contract": "CONTR0000181388", "customer_code": "1.124921",
+                      "public_key": "CUST0000172549",
+                      "name_field": "Jamtsho, Karma", "domains": []}],
+        }
+        accounts = [acct(panel="cpanel", username="someone", domain="unknown.bt")]
+        r = decide(accounts, lapsed_result)
+        self.assertFalse(r.decisions[0].will_suspend)
+
+    def test_abuse_account_with_matching_lapsed_contract_is_untouched(self):
+        accounts = [acct(panel="directadmin", username="dcclbt", domain="dcclbt.bt",
+                         suspended=True, reason="abuse")]
+        r = decide(accounts, lapsed(["dcclbt.bt"]))
+        self.assertEqual(r.decisions[0].action, SKIP_OTHER_REASON)
+        self.assertIn("not billing", r.decisions[0].reason)
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)
