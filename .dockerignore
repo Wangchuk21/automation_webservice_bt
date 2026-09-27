@@ -35,6 +35,11 @@ __pycache__/
 *.log
 logs/
 
+# Surrender evidence and audit trail: customer documents. Must never enter the
+# build context, let alone an image layer.
+data/
+tests/
+
 # Container files themselves
 Dockerfile
 .dockerignore

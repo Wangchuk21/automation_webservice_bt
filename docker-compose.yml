@@ -2,15 +2,20 @@
 #
 # Usage:
 #   cp .env.example .env      # then fill in real server credentials
-#   docker-compose up -d --build
-#   docker-compose logs -f
+#   docker compose up -d --build
+#   docker compose logs -f
 #
-# NOTE: this file targets the LEGACY `docker-compose` binary (v1 syntax,
-# `version: "3.8"`). It also works with the v2 `docker compose` plugin, which
-# will simply warn that `version` is obsolete.
-
-version: "3.8"
-
+# Use Compose v2 (`docker compose`). The legacy `docker-compose` v1 binary
+# cannot talk to Docker Engine 25+ and fails with "KeyError:
+# 'ContainerConfig'" AFTER it has already stopped the running container, which
+# takes the service down.
+#
+# SECRET VALUES CONTAINING "$"
+#   Compose treats "$NAME" in a value as a variable reference and silently
+#   substitutes an empty string, so a password containing "$" would arrive
+#   truncated. Store such values with Compose's "$$" escape ($$ -> a literal
+#   $). config.py unescapes them for the host so both agree; see
+#   _unescape_dollar_values() there. Affects NIC_PASSWORD today.
 services:
   provisioner:
     build:
@@ -42,10 +47,15 @@ services:
     # with passwords instead (set CPANEL_SSH_PASSWORD / DIRECTADMIN_SSH_PASSWORD).
     volumes:
       - ~/.ssh:/home/provisioner/.ssh:ro
+      # Surrender evidence (scanned customer letters) and the audit log.
+      # This is the only path the service writes to, which is what lets
+      # read_only: true stay in place. Keep it backed up: it is the record of
+      # who surrendered what, and the only copy of the letters.
+      - surrender_data:/app/data
 
-    # The service writes nothing to disk: no database, no uploads, no state.
-    # handover_*.txt files are only produced by the CLI's --save flag, which is
-    # a separate one-off `docker-compose run` invocation, not the server.
+    # The root filesystem is read-only: no database, no code uploads, no
+    # mutable state outside the volume mounted above. The only writes are
+    # surrender evidence and the audit trail, both under /app/data.
     read_only: true
     tmpfs:
       - /tmp
@@ -58,3 +68,8 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+volumes:
+  # Named volume holding surrender letters and the audit trail. Survives
+  # `docker compose down` and image rebuilds.
+  surrender_data:

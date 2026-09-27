@@ -45,10 +45,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=builder /opt/venv /opt/venv
 
 WORKDIR /app
-COPY --chown=provisioner:provisioner app.py cli.py config.py notifier.py nic_client.py tls_config.py ./
+# surrender.py must be listed here: app.py imports it, so omitting it makes the
+# container fail at startup rather than degrade.
+COPY --chown=provisioner:provisioner app.py cli.py config.py notifier.py nic_client.py tls_config.py surrender.py ./
 COPY --chown=provisioner:provisioner provisioners/ ./provisioners/
 COPY --chown=provisioner:provisioner templates/ ./templates/
 COPY --chown=provisioner:provisioner static/ ./static/
+
+# Surrender evidence and the audit trail are written at runtime. The directory
+# is created and owned here so that mounting a volume over /app/data inherits
+# the right ownership; without this the upload fails with EACCES.
+RUN mkdir -p /app/data/surrenders && chown -R provisioner:provisioner /app/data
 
 USER provisioner
 
