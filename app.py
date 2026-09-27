@@ -25,6 +25,7 @@ from provisioners.base import (
 )
 from notifier import send_customer_welcome_email, test_smtp_connection
 from nic_client import NICClient, split_domain_ext
+from bscs_client import BSCSClient, BSCSError
 from surrender import (
     SurrenderError,
     perform_surrender,
@@ -531,6 +532,94 @@ async def download_surrender_evidence(surrender_id: str):
         media_type=record["evidence"].get("content_type", "application/octet-stream"),
         filename=record["evidence"].get("original_name") or path.name,
     )
+
+
+# ---------------------------------------------------------------------------
+# Ericsson BSCS / CBiO CX (READ-ONLY reference)
+#
+# Lookup only: confirm a customer exists and read their contract/billing state
+# as reference. There is deliberately no endpoint here that writes to BSCS --
+# we hold no rights to change contracts or VAS packages, so the capability is
+# not offered at all rather than offered and refused.
+#
+# These use POST even for searches, because a customer name or ID in a query
+# string is captured by proxy and access logs; a request body is not.
+# ---------------------------------------------------------------------------
+def get_bscs_client():
+    """Build a BSCS client, or explain why it is unavailable."""
+    if not settings.BSCS_ENABLED:
+        raise HTTPException(
+            status_code=503,
+            detail="BSCS integration is disabled. Set BSCS_ENABLED=true in .env to enable it.",
+        )
+    if not settings.BSCS_BASE_URL or not settings.BSCS_USERNAME:
+        raise HTTPException(
+            status_code=503,
+            detail="BSCS is not configured. Set BSCS_BASE_URL and BSCS_USERNAME in .env.",
+        )
+    try:
+        return BSCSClient()
+    except BSCSError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+
+class BscsSearchRequest(BaseModel):
+    """Search criteria. Any one field is required; an empty search is refused
+    because it would pull the entire customer index out of the billing system.
+    """
+    customer_id: Optional[str] = None
+    customer_code: Optional[str] = None
+    full_name: Optional[str] = None
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    status: Optional[str] = None
+    document_id: Optional[str] = None
+
+    def criteria(self) -> Dict[str, Any]:
+        """
+        Non-blank criteria only.
+
+        Values are stripped, because a whitespace-only string is truthy: without
+        this, a search of {"full_name": "   "} would pass the "at least one
+        criterion" check and be sent to the billing system as a broad query.
+        """
+        out: Dict[str, Any] = {}
+        for key, value in self.model_dump().items():
+            if isinstance(value, str):
+                value = value.strip()
+            if value:
+                out[key] = value
+        return out
+
+
+@app.post("/api/v1/bscs/test", dependencies=[Depends(require_api_token)])
+async def bscs_test_connection():
+    """Verify BSCS portal reachability and authentication. Read-only."""
+    client = get_bscs_client()
+    return client.test_connection()
+
+
+@app.post("/api/v1/bscs/customers/search", dependencies=[Depends(require_api_token)])
+async def bscs_search_customers(payload: BscsSearchRequest):
+    """Search the BSCS customer index. Read-only; nothing is modified."""
+    criteria = payload.criteria()
+    if not criteria:
+        raise HTTPException(
+            status_code=422,
+            detail="Provide at least one criterion: customer_id, customer_code, "
+                   "full_name, first_name, last_name, status or document_id.",
+        )
+    return get_bscs_client().search_customers(**criteria)
+
+
+@app.post("/api/v1/bscs/contracts/search", dependencies=[Depends(require_api_token)])
+async def bscs_search_contracts(payload: BscsSearchRequest):
+    """Search contracts for a customer. Read-only; nothing is modified."""
+    criteria = payload.criteria()
+    customer_id = criteria.pop("customer_id", None)
+    if not customer_id:
+        raise HTTPException(status_code=422, detail="customer_id is required to search contracts.")
+    return get_bscs_client().search_contracts(customer_id, **criteria)
 
 
 @app.post("/api/v1/nic/test", dependencies=[Depends(require_api_token)])

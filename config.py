@@ -138,4 +138,25 @@ class Config:
     # the letter, so JPEG is allowed alongside it.
     SURRENDER_ALLOWED_EXTENSIONS: str = os.getenv("SURRENDER_ALLOWED_EXTENSIONS", ".pdf,.jpg,.jpeg")
 
+    # --- Ericsson BSCS / CBiO CX (read-only reference) ---
+    # STRICTLY READ-ONLY. We have no rights to write to BSCS, so this client
+    # deliberately exposes no activate/deactivate/contract-modifying method.
+    # It is a lookup aid: confirm the customer exists, read their contract and
+    # billing state, and use that as reference when provisioning or suspending.
+    # Anything that would change a contract or a VAS package belongs in the
+    # portal, performed by an authorised operator.
+    BSCS_ENABLED: bool = os.getenv("BSCS_ENABLED", "false").lower() in ("true", "1", "yes")
+    BSCS_BASE_URL: str = os.getenv("BSCS_BASE_URL", "")
+    BSCS_USERNAME: str = os.getenv("BSCS_USERNAME", "")
+    BSCS_PASSWORD: str = os.getenv("BSCS_PASSWORD", "")
+    # The CX portal is slow and issues several chained requests per operation,
+    # so this is per-request, not per-operation.
+    BSCS_TIMEOUT: int = int(os.getenv("BSCS_TIMEOUT", "45"))
+    # The portal is served over plain HTTP on the internal network, so there is
+    # no certificate to verify. Kept configurable for a future HTTPS rollout.
+    BSCS_VERIFY_SSL: bool = os.getenv("BSCS_VERIFY_SSL", "true").lower() in ("true", "1", "yes")
+    # Cap on rows returned by a search, so a broad query cannot pull the whole
+    # customer table into memory (and into a log).
+    BSCS_MAX_RESULTS: int = int(os.getenv("BSCS_MAX_RESULTS", "25"))
+
 settings = Config()
