@@ -436,6 +436,87 @@ portal's own `_method=DELETE` route.
 
 ---
 
+## ⏰ Automated Suspension (nightly job)
+
+Replaces the manual pass over the hosting panels. A second container runs
+`cron`, which invokes `scripts/suspend_expired.py` each night.
+
+```bash
+# report only -- changes nothing (this is what cron runs by default)
+./venv/bin/python scripts/suspend_expired.py
+
+# actually suspend
+./venv/bin/python scripts/suspend_expired.py --live
+```
+
+The schedule lives in [`deploy/crontab`](deploy/crontab) and is **baked into the
+image**, not bind-mounted: Debian's cron refuses to read an `/etc/cron.d` file
+that isn't owned by root. Edit that file and rebuild to change the schedule.
+
+### What it is allowed to do
+
+It may only ever move an account from **not suspended** to **suspended**, and
+only on positive confirmation from BSCS that web-hosting billing has lapsed.
+
+| Current state | Reason | Action |
+|---|---|---|
+| not suspended | — | suspend as `billing` if lapsed, else nothing |
+| suspended | `billing` | skip — already correct, so the job is idempotent |
+| suspended | `abuse`, `spam`, `user_bandwidth`, `compromised`, `forwarding`, `Surrendered` | **skip, never rewrite the reason** |
+| suspended | blank / unrecognised | skip, fail safe |
+| no BSCS match | — | skip — absence of data is never read as non-payment |
+| BSCS unreachable or list incomplete | — | **abort the whole run** |
+
+Overwriting a non-billing reason with `billing` would destroy the only record of
+why a customer was disconnected, so the job never writes a reason onto an
+account that is already suspended. It also **never unsuspends** — restoring
+service to someone who has not paid is the more dangerous direction.
+
+cPanel stores suspension reasons as free text, so billing reasons are matched
+against an explicit per-panel allowlist. Anything unrecognised is treated as
+*not* billing.
+
+### Requirements
+
+- `BSCS_ENABLED=true` and `BSCS_BASE_URL` / `BSCS_USERNAME` / `BSCS_PASSWORD`
+  in `.env`
+- `DIRECTADMIN_API_PASSWORD` set, without which the job **refuses to run**
+  rather than quietly skipping the DirectAdmin panel
+- Network reachability to the BSCS portal, the cPanel/DirectAdmin servers and
+  nic.bt.bt. On this deployment that is the VPN tunnel on the host; if the
+  tunnel is down the job fails closed and suspends nothing.
+
+### Going live
+
+The crontab runs in **dry-run** mode. Watch it for a few days:
+
+```bash
+docker compose logs -f suspender
+docker compose exec suspender cat /app/data/suspension_audit.jsonl
+```
+
+When the list looks right, add `--live` to `deploy/crontab` and rebuild.
+
+### Container notes
+
+`cron` must start as root so it can drop privileges to run the job as
+`provisioner`; running it unprivileged fails with `seteuid: Operation not
+permitted` and the container crash-loops. The job itself still runs
+unprivileged. This container is not `read_only` (unlike the web service) because
+cron's writes are spread across several paths, and it never listens on a port.
+
+### Known limits
+
+- The BSCS domain join is **name-based and incomplete**. A lapsed contract whose
+  customer record holds only a person's name yields no domain, so that customer
+  is never matched. This is the main gap.
+- The BSCS portal caps a result page at 25 rows with no working paging control.
+  A partial list is detected and aborts the run, but it does not continue.
+- Neither panel's suspension **write** has been executed against a real account
+  yet; both are gated behind `--live` and should be proven one account at a time.
+
+---
+
 ## 🔒 Customer Handover Output Example
 
 When an account is provisioned, the following handover card is automatically generated and ready to send to your customer:

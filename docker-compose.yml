@@ -69,7 +69,69 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  # ---------------------------------------------------------------------
+  # Scheduled suspension job
+  #
+  # Nightly check for hosting accounts whose web-hosting billing has lapsed.
+  # Runs in the same image, on the same host, so it reaches nic.bt.bt, the
+  # cPanel/DirectAdmin servers and the BSCS portal over the same paths the
+  # provisioning service uses.
+  #
+  # The schedule is in deploy/crontab and is baked into the image. It runs in
+  # DRY RUN mode: it reports what it would suspend and changes nothing. Add
+  # --live to the crontab command and rebuild once you are satisfied.
+  # ---------------------------------------------------------------------
+  suspender:
+    image: bt-hosting-provisioner:latest
+    container_name: bt_suspender
+    restart: unless-stopped
+
+    env_file:
+      - .env
+
+    depends_on:
+      - provisioner
+
+    # SSH key for the cPanel server, read-only, as the provisioner service uses.
+    volumes:
+      - ~/.ssh:/home/provisioner/.ssh:ro
+      # The suspension audit trail. Separate from the surrender evidence volume
+      # because the record shapes differ.
+      - suspension_audit:/app/data
+
+    # cron must start as root so it can drop privileges to run the job as
+    # "provisioner" -- running cron unprivileged fails with "seteuid:
+    # Operation not permitted" and the container crash-loops. The job itself
+    # still runs unprivileged, as set in the crontab.
+    #
+    # The tmpfs mounts are writable by provisioner so the job's own writes work
+    # regardless of which user cron ends up using for them.
+    #
+    # Not read_only, unlike the web service: this container is a job runner that
+    # never listens on a port, and cron's write requirements are spread across
+    # several paths.
+    user: root
+    tmpfs:
+      - /var/spool/cron:uid=1000,gid=1000,mode=0755
+      - /var/run:mode=0755
+      - /tmp:mode=1777
+
+    security_opt:
+      - no-new-privileges:true
+
+    # -f runs cron in the foreground so the container's lifetime is cron's.
+    command: ["cron", "-f"]
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
 volumes:
   # Named volume holding surrender letters and the audit trail. Survives
   # `docker compose down` and image rebuilds.
   surrender_data:
+  # Named volume for the suspension audit trail, kept apart from the surrender
+  # evidence so the two record shapes do not end up in one file.
+  suspension_audit:

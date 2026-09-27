@@ -36,9 +36,11 @@ ENV PYTHONUNBUFFERED=1 \
     PATH="/opt/venv/bin:$PATH" \
     HOME=/home/provisioner
 
-# git is required by paramiko to read public keys for known_hosts handling
+# git is required by paramiko to read public keys for known_hosts handling.
+# cron drives the scheduled suspension job; see deploy/crontab.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         git \
+        cron \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --shell /bin/bash --uid 1000 provisioner
 
@@ -52,6 +54,13 @@ COPY --chown=provisioner:provisioner provisioners/ ./provisioners/
 COPY --chown=provisioner:provisioner templates/ ./templates/
 COPY --chown=provisioner:provisioner static/ ./static/
 COPY --chown=provisioner:provisioner scripts/ ./scripts/
+
+# The suspension schedule is baked in rather than bind-mounted: Debian's cron
+# refuses to read an /etc/cron.d file that is not owned by root, which a
+# bind-mount from a non-root host directory would be. To change the schedule,
+# edit deploy/crontab and rebuild.
+COPY --chown=root:root deploy/crontab /etc/cron.d/bt-suspension
+RUN chmod 0644 /etc/cron.d/bt-suspension && chown root:root /etc/cron.d/bt-suspension
 
 # Surrender evidence and the audit trail are written at runtime. The directory
 # is created and owned here so that mounting a volume over /app/data inherits

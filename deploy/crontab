@@ -1,0 +1,14 @@
+# Schedule for the automated suspension job.
+#
+# Deliberately NOT live yet. This reports what would be suspended and changes
+# nothing. Review the audit log for a few days, then add --live to the command
+# and rebuild.
+#
+# The job runs as "provisioner", not root: cron itself runs as root because it
+# has to be able to drop privileges to the job's user, and it cannot do that
+# while running unprivileged (seteuid fails and the container crash-loops).
+#
+# m  h dom mon dow  user       command
+# 17 past 2am, deliberately off the hour: other cron jobs on the host tend to
+# fire at :00, and this one makes several calls to a slow billing portal.
+17 2 * * * provisioner cd /app && /opt/venv/bin/python scripts/suspend_expired.py >> /proc/1/fd/1 2>&1
