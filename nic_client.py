@@ -1,5 +1,6 @@
 import logging
 import re
+import time
 from datetime import date
 from typing import Dict, Any, Optional, Tuple
 import requests
@@ -7,6 +8,46 @@ from config import settings
 from tls_config import resolve_verify
 
 logger = logging.getLogger(__name__)
+
+# nic.bt.bt is slow: a single domain write has been observed taking around 40
+# seconds end to end. The previous flat 15s timeout therefore failed
+# intermittently, which in a surrender produced partial results -- the hosting
+# account removed but the domain registration left behind. Reads and writes get
+# a generous timeout, and writes are retried once on a transient network error.
+REGISTRY_TIMEOUT = 60
+REGISTRY_WRITE_ATTEMPTS = 3
+RETRY_BACKOFF_SECONDS = 3
+
+
+def _request_with_retry(session, method: str, url: str, attempts: int = REGISTRY_WRITE_ATTEMPTS, **kwargs):
+    """
+    Issue a registry request on the given session, retrying transient network
+    failures.
+
+    The session must be passed in and used for the call: the registry relies on
+    the session cookie and the CSRF token fetched from the login page, and the
+    session also carries the TLS verification setting. Issuing the request
+    through the bare `requests` module instead silently drops both and the
+    portal rejects the login.
+
+    Only connection-level problems (timeouts, resets) are retried. An HTTP
+    error response is returned as-is, because a 4xx/5xx from the portal is a
+    decision the server has already made and repeating the call would not
+    change it.
+    """
+    last_exc = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return session.request(method, url, **kwargs)
+        except (requests.Timeout, requests.ConnectionError) as e:
+            last_exc = e
+            logger.warning(
+                "nic.bt.bt %s %s failed (attempt %d/%d): %s",
+                method, url, attempt, attempts, e,
+            )
+            if attempt < attempts:
+                time.sleep(RETRY_BACKOFF_SECONDS * attempt)
+    raise last_exc
 
 
 def split_domain_ext(full_domain: str) -> Tuple[str, str]:
@@ -51,7 +92,7 @@ class NICClient:
         """Authenticate with nic.bt.bt admin portal."""
         login_url = f"{self.base_url}/login"
         try:
-            r = self.session.get(login_url, timeout=15)
+            r = self.session.get(login_url, timeout=REGISTRY_TIMEOUT)
             if r.status_code != 200:
                 return False, f"Failed to reach login page: HTTP {r.status_code}"
 
@@ -66,7 +107,10 @@ class NICClient:
                 "password": self.password
             }
 
-            resp = self.session.post(login_url, data=payload, timeout=15, allow_redirects=True)
+            resp = _request_with_retry(
+            self.session, "POST", login_url, data=payload,
+            timeout=REGISTRY_TIMEOUT, allow_redirects=True,
+        )
             if "/login" not in resp.url and (resp.status_code == 200 or "domain" in resp.url):
                 self._logged_in = True
                 return True, "Successfully logged into nic.bt.bt admin portal."
@@ -88,7 +132,7 @@ class NICClient:
             return None
 
         try:
-            r = self.session.get(f"{self.base_url}/domain", timeout=15)
+            r = self.session.get(f"{self.base_url}/domain", timeout=REGISTRY_TIMEOUT)
             if r.status_code != 200:
                 return None
 
@@ -130,7 +174,7 @@ class NICClient:
             if existing_id:
                 # Update existing domain
                 edit_url = f"{self.base_url}/domain/{existing_id}/edit"
-                r_edit = self.session.get(edit_url, timeout=15)
+                r_edit = self.session.get(edit_url, timeout=REGISTRY_TIMEOUT)
                 token_match = re.search(r'name=["\x27]_token["\x27]\s+value=["\x27]([^"\x27]+)["\x27]', r_edit.text)
                 csrf_token = token_match.group(1) if token_match else ""
 
@@ -162,7 +206,10 @@ class NICClient:
                     "billing_email": email
                 }
 
-                resp = self.session.post(patch_url, data=data, timeout=15, allow_redirects=True)
+                resp = _request_with_retry(
+                    self.session, "POST", patch_url, data=data,
+                    timeout=REGISTRY_TIMEOUT, allow_redirects=True,
+                )
                 if resp.status_code in (200, 302):
                     return {
                         "success": True,
@@ -179,7 +226,7 @@ class NICClient:
             else:
                 # Create new domain
                 create_url = f"{self.base_url}/domain/create"
-                r_create = self.session.get(create_url, timeout=15)
+                r_create = self.session.get(create_url, timeout=REGISTRY_TIMEOUT)
                 token_match = re.search(r'name=["\x27]_token["\x27]\s+value=["\x27]([^"\x27]+)["\x27]', r_create.text)
                 csrf_token = token_match.group(1) if token_match else ""
 
@@ -211,7 +258,10 @@ class NICClient:
                     "billing_email": email
                 }
 
-                resp = self.session.post(post_url, data=data, timeout=15, allow_redirects=True)
+                resp = _request_with_retry(
+                    self.session, "POST", post_url, data=data,
+                    timeout=REGISTRY_TIMEOUT, allow_redirects=True,
+                )
                 if resp.status_code in (200, 302) and "login" not in resp.url:
                     new_id = self.find_domain_id(base_domain, ext)
                     return {
@@ -230,6 +280,94 @@ class NICClient:
             logger.error(f"Failed to submit domain on nic.bt.bt: {e}")
             return {"success": False, "message": f"Exception occurred: {str(e)}"}
 
+    def delete_domain(self, domain: str, confirm: bool = False) -> Dict[str, Any]:
+        """
+        Permanently delete a domain registration from the nic.bt.bt registry.
+
+        THIS IS IRREVERSIBLE. The portal's per-row Delete control issues
+        POST /domain/{id} with a _method=DELETE override plus a CSRF token,
+        which is the same Laravel mechanism used for the PATCH update path
+        above. Success is confirmed by re-querying the record rather than by
+        trusting the response status alone.
+
+        Args:
+            domain: Full domain, e.g. 'wank.bt'.
+            confirm: Must be True. Guards against accidental invocation.
+        """
+        if not confirm:
+            return {
+                "success": False,
+                "message": "Refusing to delete without confirm=True. "
+                           "This permanently removes the domain registration."
+            }
+
+        ok, msg = self._ensure_logged_in()
+        if not ok:
+            return {"success": False, "message": f"NIC Login Failed: {msg}"}
+
+        base_domain, ext = split_domain_ext(domain)
+        existing_id = self.find_domain_id(base_domain, ext)
+        if not existing_id:
+            return {
+                "success": False,
+                "message": f"Domain {base_domain}{ext} was not found in the nic.bt.bt "
+                           "admin list. Nothing to delete."
+            }
+
+        try:
+            # Re-read the listing to obtain a CSRF token bound to this session.
+            # The token is not cached: a stale token would fail the POST.
+            r_list = self.session.get(f"{self.base_url}/domain", timeout=REGISTRY_TIMEOUT)
+            if r_list.status_code != 200:
+                return {
+                    "success": False,
+                    "message": f"Could not load the domain list to obtain a CSRF token: "
+                               f"HTTP {r_list.status_code}"
+                }
+            token_match = re.search(r'name=["\x27]_token["\x27]\s+value=["\x27]([^"\x27]+)["\x27]', r_list.text)
+            if not token_match:
+                return {
+                    "success": False,
+                    "message": "CSRF token not found on the domain list page; refusing to POST."
+                }
+            csrf_token = token_match.group(1)
+
+            delete_url = f"{self.base_url}/domain/{existing_id}"
+            resp = _request_with_retry(
+                self.session, "POST", delete_url,
+                data={"_token": csrf_token, "_method": "DELETE"},
+                timeout=REGISTRY_TIMEOUT,
+                allow_redirects=True,
+            )
+
+            if "login" in resp.url:
+                return {
+                    "success": False,
+                    "message": "Session expired during delete; the request was not applied."
+                }
+
+            # A 200 is also returned on validation errors, so confirm the record
+            # is actually gone instead of inferring success from the status code.
+            if self.find_domain_id(base_domain, ext):
+                return {
+                    "success": False,
+                    "message": f"Delete request returned HTTP {resp.status_code} but domain "
+                               f"{base_domain}{ext} (ID: {existing_id}) still exists. "
+                               "The record was not removed."
+                }
+
+            return {
+                "success": True,
+                "action": "deleted",
+                "domain_id": existing_id,
+                "domain": f"{base_domain}{ext}",
+                "message": f"Domain {base_domain}{ext} (ID: {existing_id}) successfully deleted "
+                           "from nic.bt.bt."
+            }
+        except Exception as e:
+            logger.error(f"Failed to delete domain on nic.bt.bt: {e}")
+            return {"success": False, "message": f"Exception occurred: {str(e)}"}
+
     def query_whois(self, domain: str) -> Dict[str, Any]:
         """
         Public WHOIS lookup from nic.bt.bt for the given domain.
@@ -238,7 +376,7 @@ class NICClient:
         search_url = f"{self.base_url}/search?query={base_domain}&ext={ext}"
 
         try:
-            r = self.session.get(search_url, timeout=15)
+            r = self.session.get(search_url, timeout=REGISTRY_TIMEOUT)
             if r.status_code != 200:
                 return {
                     "found": False,

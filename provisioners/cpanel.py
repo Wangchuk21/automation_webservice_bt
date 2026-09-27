@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 import shlex
 from typing import Optional, Dict, Any
 import requests
@@ -7,6 +8,7 @@ import requests
 from .base import (
     BaseProvisioner,
     ProvisionerResult,
+    ValidationError,
     generate_secure_password,
     sanitize_username
 )
@@ -389,6 +391,105 @@ class CPanelProvisioner(BaseProvisioner):
                 domain, username, password, email,
                 f"WHM API request failed: {str(e)}"
             )
+
+    def account_exists(self, username: str) -> bool:
+        """
+        Read-only check for whether a system account exists on the server.
+
+        Uses getent(1), which only reads the account database. Used to make
+        deletion idempotent and to confirm a target before acting on it.
+        """
+        if not username or not re.match(r'^[a-z][a-z0-9]*$', username):
+            raise ValidationError(f"Invalid cPanel username: {username!r}")
+        try:
+            code, stdout, _ = self.ssh.execute(f"getent passwd {shlex.quote(username)}")
+            return code == 0 and bool(stdout.strip())
+        except Exception as e:
+            logger.warning(f"Existence check for '{username}' failed: {e}")
+            return False
+
+    def delete_account(
+        self,
+        username: str,
+        reason: str = "Test account cleanup",
+        confirm: bool = False
+    ) -> Dict[str, Any]:
+        """
+        Permanently remove a cPanel account and all associated data.
+
+        THIS IS IRREVERSIBLE. It destroys the home directory, mail stores and
+        any databases belonging to the account. There is no undo.
+
+        Intentionally exposed through the CLI only and never through the web
+        dashboard or the /api/v1 endpoints, so that an unauthenticated or
+        mistaken HTTP call cannot destroy a customer's hosting.
+
+        Args:
+            username: The cPanel/system account to remove.
+            reason: Recorded in the server audit log via --reason.
+            confirm: Must be True. Guards against accidental invocation.
+        """
+        if not confirm:
+            return {
+                "success": False,
+                "message": "Refusing to delete without confirm=True. "
+                           "This operation permanently destroys all account data."
+            }
+
+        if not username or not re.match(r'^[a-z][a-z0-9]*$', username):
+            return {"success": False, "message": f"Invalid cPanel username: {username!r}"}
+
+        if not self.account_exists(username):
+            return {
+                "success": False,
+                "message": f"Account '{username}' does not exist on {self.host}. Nothing to delete."
+            }
+
+        # whmapi1 removeacct destroys the account and all of its data. The
+        # username and reason are quoted as discrete argv words; reason is
+        # single-quoted via shlex so a quote in it cannot break out and be
+        # read as shell syntax.
+        cmd = (
+            "whmapi1 --output=json removeacct "
+            f"user={shlex.quote(username)} "
+            f"reason={shlex.quote(reason)}"
+        )
+        sudo_stdin = None
+        if self.ssh_user != "root":
+            if self.ssh_password:
+                cmd = "sudo -S -p '' " + cmd
+                sudo_stdin = self.ssh_password + "\n"
+            else:
+                cmd = "sudo -n " + cmd
+
+        try:
+            code, stdout, stderr = self.ssh.execute(cmd, stdin_data=sudo_stdin)
+        except Exception as e:
+            return {"success": False, "message": f"SSH execution failed: {e}"}
+
+        clean = "\n".join(l for l in stdout.splitlines() if not l.startswith("[sudo]")).strip()
+
+        if code != 0:
+            return {
+                "success": False,
+                "message": f"removeacct exited {code}: {stderr or clean or 'no output'}",
+                "raw_response": clean,
+            }
+
+        # Confirm the account is really gone rather than trusting the exit code.
+        if self.account_exists(username):
+            return {
+                "success": False,
+                "message": f"removeacct reported success but account '{username}' still exists. "
+                           "Investigate manually before retrying.",
+                "raw_response": clean,
+            }
+
+        return {
+            "success": True,
+            "message": f"cPanel account '{username}' deleted from {self.host}. Reason: {reason}",
+            "raw_response": clean,
+        }
 
     def _build_failure_result(
         self,
