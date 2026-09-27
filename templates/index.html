@@ -371,6 +371,121 @@
       </section>
     </main>
 
+    <!-- Service Surrender (termination) -->
+    <section class="card form-card surrender-card" id="surrender">
+      <div class="card-header">
+        <div class="card-icon">⚠️</div>
+        <div>
+          <h2 class="card-title">Service Surrender / Termination</h2>
+          <p class="card-subtitle">Remove a hosting account, a domain registration, or both</p>
+        </div>
+      </div>
+
+      <div class="surrender-warning">
+        <strong>This destroys customer data permanently.</strong>
+        Files, mail and databases are removed with no way to recover them. A scanned
+        surrender letter is required and every action is written to the audit log.
+      </div>
+
+      <form id="surrender-form" onsubmit="handleSurrenderSubmit(event)">
+        <div class="form-row">
+          <div class="form-group">
+            <label for="sur_domain" class="form-label">Domain <span class="required">*</span></label>
+            <div class="input-wrapper">
+              <input type="text" id="sur_domain" placeholder="e.g. customer.bt" required>
+            </div>
+          </div>
+          <div class="form-group">
+            <label for="sur_username" class="form-label">Hosting Username</label>
+            <div class="input-wrapper">
+              <input type="text" id="sur_username" placeholder="e.g. customer">
+            </div>
+            <span class="form-hint">Required only when surrendering hosting.</span>
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label for="sur_panel" class="form-label">Hosting Panel</label>
+            <div class="input-wrapper">
+              <select id="sur_panel">
+                <option value="cpanel">cPanel</option>
+                <option value="directadmin">DirectAdmin</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-group">
+            <label for="sur_scope" class="form-label">Surrender <span class="required">*</span></label>
+            <div class="input-wrapper">
+              <select id="sur_scope">
+                <option value="both">Both hosting and domain</option>
+                <option value="hosting">Hosting account only</option>
+                <option value="domain">Domain registration only</option>
+              </select>
+            </div>
+            <span class="form-hint">Hosting is always removed before the domain registration.</span>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label for="sur_reason" class="form-label">Reason</label>
+          <div class="input-wrapper">
+            <input type="text" id="sur_reason" placeholder="e.g. Customer submitted surrender letter No. BT/2026/114">
+          </div>
+          <span class="form-hint">Recorded in the audit log alongside the evidence.</span>
+        </div>
+
+        <div class="form-group">
+          <label for="sur_evidence" class="form-label">Surrender Letter (PDF or JPEG) <span class="required">*</span></label>
+          <div class="input-wrapper">
+            <input type="file" id="sur_evidence" accept=".pdf,.jpg,.jpeg,application/pdf,image/jpeg">
+          </div>
+          <span class="form-hint" id="sur_evidence_hint">Scanned copy of the customer's surrender letter.</span>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label for="sur_confirm_text" class="form-label">Type <code id="sur_confirm_echo">the domain</code> to confirm <span class="required">*</span></label>
+            <div class="input-wrapper">
+              <input type="text" id="sur_confirm_text" placeholder="Type the domain to confirm" autocomplete="off">
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">&nbsp;</label>
+            <div class="form-actions">
+              <button type="button" id="btn-surrender-preview" class="btn btn-secondary" onclick="previewSurrender()">
+                <span class="btn-icon">🔍</span>
+                <span>Preview Impact</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div id="surrender-preview" class="surrender-preview hidden"></div>
+
+        <div class="form-actions">
+          <button type="submit" id="btn-surrender-submit" class="btn btn-danger btn-block">
+            <span class="btn-icon">⚠️</span>
+            <span id="btn-surrender-text">Surrender Service</span>
+          </button>
+        </div>
+
+        <div id="surrender-result" class="surrender-result hidden"></div>
+      </form>
+    </section>
+
+    <!-- Surrender audit history -->
+    <section class="card docs-card" id="surrender-log">
+      <h3 class="docs-title">🗂️ Surrender Audit Log</h3>
+      <p class="docs-desc">Every surrender is recorded, including partial failures.</p>
+      <div class="docs-grid">
+        <div class="docs-box">
+          <div class="docs-box-title">Recent surrenders</div>
+          <div id="surrender-history"><span class="form-hint">Loading…</span></div>
+        </div>
+      </div>
+    </section>
+
     <!-- Quick Documentation / CLI reference -->
     <section id="quick-docs" class="card docs-card">
       <h3 class="docs-title">⚡ Command Line Automation & API</h3>

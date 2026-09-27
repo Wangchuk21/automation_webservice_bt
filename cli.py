@@ -72,6 +72,135 @@ def handle_test(args):
         console.print(f"[bold red]✗ FAILED:[/bold red] {result.get('message')}")
 
 
+def handle_delete(args):
+    """
+    Remove a hosting account. Destructive and irreversible, so it requires an
+    explicit --yes and re-states the target before acting. Intentionally not
+    wired to the web dashboard or the /api/v1 endpoints.
+    """
+    prov = get_provisioner(args.panel)
+
+    try:
+        username = validate_username(args.username)
+    except ValidationError as e:
+        console.print(Panel(
+            f"[bold red]Invalid input:[/bold red]\n{e}",
+            title="[red]Validation Error[/red]",
+            border_style="red"
+        ))
+        raise SystemExit(1)
+
+    console.print(Panel(
+        f"[bold red]DESTRUCTIVE OPERATION[/bold red]\n\n"
+        f"Server:  [bold]{prov.host}[/bold]\n"
+        f"Account: [bold]{username}[/bold]\n"
+        f"Reason:  {args.reason}\n\n"
+        "This permanently destroys the account's home directory, mail stores\n"
+        "and databases. It cannot be undone.",
+        title="[red]Confirm account deletion[/red]",
+        border_style="red"
+    ))
+
+    if not args.yes:
+        console.print("[yellow]Aborted. Re-run with --yes to confirm deletion.[/yellow]")
+        raise SystemExit(1)
+
+    result = prov.delete_account(username, reason=args.reason, confirm=True)
+    if result.get("success"):
+        console.print(f"\n[bold green]✓ DELETED:[/bold green] {result.get('message')}")
+    else:
+        console.print(f"\n[bold red]✗ FAILED:[/bold red] {result.get('message')}")
+        raise SystemExit(1)
+
+
+def handle_surrender(args):
+    """
+    Surrender a hosting account and/or domain registration from the terminal.
+
+    Destructive and irreversible, so it requires --evidence (the scanned
+    surrender letter) and an explicit --yes.
+    """
+    from surrender import (
+        SurrenderError, perform_surrender, store_evidence,
+    )
+    from nic_client import NICClient
+
+    try:
+        domain = validate_domain(args.domain)
+        username = validate_username(args.username) if args.username else None
+    except ValidationError as e:
+        console.print(Panel(
+            f"[bold red]Invalid input:[/bold red]\n{e}",
+            title="[red]Validation Error[/red]",
+            border_style="red"
+        ))
+        raise SystemExit(1)
+
+    if not args.evidence:
+        console.print(Panel(
+            "[bold red]Missing evidence.[/bold red]\n\n"
+            "A scanned surrender letter (PDF or JPEG) is required:\n"
+            "  --evidence /path/to/surrender-letter.pdf",
+            title="[red]Evidence required[/red]",
+            border_style="red"
+        ))
+        raise SystemExit(1)
+
+    prov = get_provisioner(args.panel)
+
+    console.print(Panel(
+        f"[bold red]DESTRUCTIVE OPERATION — SERVICE SURRENDER[/bold red]\n\n"
+        f"Domain:  [bold]{domain}[/bold]\n"
+        f"Panel:   {args.panel} ({prov.host})\n"
+        f"Account: [bold]{username or 'n/a'}[/bold]\n"
+        f"Scope:   [bold]{args.scope}[/bold]\n"
+        f"Reason:  {args.reason}\n\n"
+        "Hosting files, mail and databases are destroyed, and the domain\n"
+        "registration is removed from the registry. This cannot be undone.",
+        title="[red]Confirm surrender[/red]",
+        border_style="red"
+    ))
+
+    if not args.yes:
+        console.print("[yellow]Aborted. Re-run with --yes to confirm the surrender.[/yellow]")
+        raise SystemExit(1)
+
+    # Validate and store the evidence before destroying anything, so a bad
+    # upload cannot leave a half-finished surrender behind.
+    try:
+        with open(args.evidence, "rb") as fh:
+            evidence = store_evidence(fh, args.evidence)
+    except SurrenderError as e:
+        console.print(f"[bold red]✗ Evidence rejected:[/bold red] {e}")
+        raise SystemExit(1)
+    except OSError as e:
+        console.print(f"[bold red]✗ Cannot read evidence:[/bold red] {e}")
+        raise SystemExit(1)
+
+    record = perform_surrender(
+        domain=domain,
+        scope=args.scope,
+        username=username,
+        reason=args.reason,
+        evidence=evidence,
+        panel=args.panel,
+        operator="cli",
+        hosting_delete=lambda u: prov.delete_account(u, reason=args.reason, confirm=True),
+        domain_delete=lambda d: NICClient().delete_domain(d, confirm=True),
+    )
+
+    for action in record["actions"]:
+        icon = "[green]✓[/green]" if action["success"] else "[yellow]![/yellow]"
+        console.print(f"{icon} [bold]{action['target']}[/bold]: {action['message']}")
+
+    console.print(
+        f"\n[bold]Reference:[/bold] {record['id']}  "
+        f"[bold]Status:[/bold] {record['status']}"
+    )
+    if record["status"] != "completed":
+        raise SystemExit(1)
+
+
 def handle_create(args):
     # Validate before any SSH connection is opened, so malformed input can never
     # reach a remote shell. The CLI bypasses the API's pydantic validators.
@@ -278,6 +407,33 @@ def main():
     reg_parser.add_argument("--country", default="BT", help="2-letter ISO country code")
     reg_parser.add_argument("--renewal-date", help="Domain renewal date, YYYY-MM-DD (default: today)")
     reg_parser.set_defaults(func=handle_register_domain)
+
+    # Delete command
+    delete_parser = subparsers.add_parser(
+        "delete",
+        help="PERMANENTLY delete a hosting account (irreversible; not exposed via the web API)"
+    )
+    delete_parser.add_argument("--panel", choices=["cpanel", "directadmin"], required=True, help="Target panel")
+    delete_parser.add_argument("--username", required=True, help="Existing cPanel/DirectAdmin account name")
+    delete_parser.add_argument("--reason", default="Account removal", help="Reason recorded in the server audit log")
+    delete_parser.add_argument("--yes", action="store_true", help="Required. Confirms the deletion.")
+    delete_parser.set_defaults(func=handle_delete)
+
+    # Surrender command
+    surrender_parser = subparsers.add_parser(
+        "surrender",
+        help="Surrender (terminate) a hosting account and/or domain registration"
+    )
+    surrender_parser.add_argument("--domain", required=True, help="Customer domain (e.g. client.bt)")
+    surrender_parser.add_argument("--scope", choices=["hosting", "domain", "both"], default="both",
+                                  help="Which service to surrender (default: both)")
+    surrender_parser.add_argument("--panel", choices=["cpanel", "directadmin"], default="cpanel",
+                                  help="Panel hosting the account (default: cpanel)")
+    surrender_parser.add_argument("--username", help="Hosting account name (required for --scope hosting/both)")
+    surrender_parser.add_argument("--reason", default="Service surrender", help="Reason recorded in the audit log")
+    surrender_parser.add_argument("--evidence", help="Scanned surrender letter (.pdf/.jpg). Required.")
+    surrender_parser.add_argument("--yes", action="store_true", help="Required. Confirms the surrender.")
+    surrender_parser.set_defaults(func=handle_surrender)
 
     # Create command
     create_parser = subparsers.add_parser("create", help="Create new hosting user account")

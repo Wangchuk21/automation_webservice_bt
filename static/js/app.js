@@ -1,4 +1,193 @@
 // ========================================================
+// SERVICE SURRENDER (termination)
+// ========================================================
+
+// Escape text before putting it into innerHTML. The API echoes operator-supplied
+// values (reasons, original filenames, server messages) back to the page, so
+// rendering them unescaped would be an XSS hole.
+function esc(value) {
+  return String(value === null || value === undefined ? "" : value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+// Read the current surrender form as a plain object.
+function surrenderFormData(includeFile) {
+  const fd = new FormData();
+  fd.append("domain", document.getElementById("sur_domain").value.trim());
+  fd.append("panel", document.getElementById("sur_panel").value);
+  fd.append("scope", document.getElementById("sur_scope").value);
+  fd.append("username", document.getElementById("sur_username").value.trim());
+  fd.append("reason", document.getElementById("sur_reason").value.trim());
+  if (includeFile) {
+    const input = document.getElementById("sur_evidence");
+    if (input && input.files && input.files.length) {
+      fd.append("evidence", input.files[0]);
+    }
+  }
+  return fd;
+}
+
+async function previewSurrender() {
+  const box = document.getElementById("surrender-preview");
+  const domain = document.getElementById("sur_domain").value.trim();
+  if (!domain) {
+    showToast("Enter a domain first.", "error");
+    return;
+  }
+
+  box.classList.remove("hidden");
+  box.innerHTML = '<span class="form-hint">Checking what would be removed…</span>';
+
+  try {
+    const res = await fetch("/api/v1/surrenders/preview", {
+      method: "POST",
+      headers: apiHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({
+        domain: domain,
+        username: document.getElementById("sur_username").value.trim() || null,
+        panel: document.getElementById("sur_panel").value,
+        scope: document.getElementById("sur_scope").value,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      box.innerHTML = `<div class="surrender-step-fail">${esc(describeApiError(data, res.status))}</div>`;
+      return;
+    }
+
+    box.innerHTML = `<h4 class="surrender-preview-title">This will remove:</h4>` + data.steps.map((s) => {
+      const cls = s.present === false ? "surrender-step-skip" : "surrender-step-warn";
+      const tag = s.present ? "WILL BE REMOVED" : "NOT FOUND";
+      const who = s.target === "hosting" ? ` (${esc(s.username || "?")})` : "";
+      return `<div class="surrender-step ${cls}">
+        <div class="surrender-step-head"><strong>${esc(s.target)}${who}</strong><span class="surrender-tag">${tag}</span></div>
+        <p>${esc(s.action)}</p>
+      </div>`;
+    }).join("") + `<p class="form-hint">${esc(data.note || "")}</p>`;
+  } catch (err) {
+    box.innerHTML = `<div class="surrender-step-fail">${esc(err.message)}</div>`;
+  }
+}
+
+async function handleSurrenderSubmit(e) {
+  e.preventDefault();
+
+  const domain = document.getElementById("sur_domain").value.trim();
+  const typed = document.getElementById("sur_confirm_text").value.trim();
+  const fileInput = document.getElementById("sur_evidence");
+
+  // Require typing the domain. This is the last chance to catch a mistake before
+  // customer data is destroyed, so it is checked before anything is sent.
+  if (!domain || typed.toLowerCase() !== domain.toLowerCase()) {
+    showToast(`Type the domain exactly ("${domain}") to confirm.`, "error");
+    return;
+  }
+  if (!fileInput.files || !fileInput.files.length) {
+    showToast("Attach the scanned surrender letter (PDF or JPEG).", "error");
+    return;
+  }
+  if (!window.confirm(
+    `Permanently surrender ${domain}?\n\nThis destroys hosting files, mail and databases, and removes the domain registration. It cannot be undone.`
+  )) {
+    return;
+  }
+
+  const btn = document.getElementById("btn-surrender-submit");
+  const label = document.getElementById("btn-surrender-text");
+  const original = label.textContent;
+  btn.disabled = true;
+  label.textContent = "Surrendering…";
+
+  const fd = surrenderFormData(true);
+  fd.append("confirm", "true");
+
+  try {
+    const res = await fetch("/api/v1/surrenders", {
+      method: "POST",
+      headers: apiHeaders(),
+      body: fd,
+    });
+    const data = await res.json();
+    renderSurrenderResult(data, res.ok);
+    if (data && data.id) loadSurrenderHistory();
+  } catch (err) {
+    showToast(err.message, "error");
+  } finally {
+    btn.disabled = false;
+    label.textContent = original;
+  }
+}
+
+function renderSurrenderResult(rec, ok) {
+  const box = document.getElementById("surrender-result");
+  box.classList.remove("hidden");
+
+  const cls = !ok || rec.status === "failed" ? "surrender-step-fail"
+    : (rec.status === "partial" ? "surrender-step-warn" : "surrender-step-ok");
+  const title = !ok ? "Surrender failed"
+    : (rec.status === "partial" ? "Surrender partially completed — read this"
+    : (rec.status === "completed" ? "Surrender completed" : "Surrender result"));
+
+  const actions = (rec.actions || []).map((a) => {
+    const c = a.success ? "surrender-step-ok" : "surrender-step-fail";
+    return `<div class="surrender-step ${c}">
+      <div class="surrender-step-head"><strong>${esc(a.target)}</strong>
+      <span class="surrender-tag">${a.success ? "DONE" : "NOT DONE"}</span></div>
+      <p>${esc(a.message || "")}</p>
+    </div>`;
+  }).join("");
+
+  box.className = `surrender-result ${cls}`;
+  box.innerHTML = `<h4>${esc(title)}</h4>
+    ${rec.id ? `<p class="form-hint">Reference: <code>${esc(rec.id)}</code></p>` : ""}
+    ${actions}
+    ${rec.status === "partial" ? '<p class="form-hint">One or more steps did not complete. The remaining step can be retried on its own — nothing was silently skipped.</p>' : ""}
+    ${!ok && rec.detail ? `<p>${esc(rec.detail)}</p>` : ""}`;
+  showToast(title, rec.status === "completed" && ok ? "success" : "error");
+}
+
+async function loadSurrenderHistory() {
+  const box = document.getElementById("surrender-history");
+  if (!box) return;
+  try {
+    const res = await fetch("/api/v1/surrenders?limit=25", { headers: apiHeaders() });
+    if (!res.ok) {
+      box.innerHTML = `<span class="form-hint">Unavailable (${res.status}).</span>`;
+      return;
+    }
+    const data = await res.json();
+    const rows = data.surrenders || [];
+    if (!rows.length) {
+      box.innerHTML = '<span class="form-hint">No surrenders recorded yet.</span>';
+      return;
+    }
+    box.innerHTML = `<table class="surrender-table">
+      <thead><tr><th>Reference</th><th>Domain</th><th>Scope</th><th>Status</th><th>When</th></tr></thead>
+      <tbody>${rows.map((r) => `<tr>
+        <td><code>${esc(r.id || "")}</code></td>
+        <td>${esc(r.domain || "")}</td>
+        <td>${esc(r.scope || "")}</td>
+        <td class="st-${esc(r.status || "")}">${esc(r.status || "")}</td>
+        <td>${esc((r.started_at || "").replace("T", " "))}</td>
+      </tr>`).join("")}</tbody></table>`;
+  } catch (err) {
+    box.innerHTML = `<span class="form-hint">${esc(err.message)}</span>`;
+  }
+}
+
+// Keep the confirmation phrase in sync with the domain field.
+document.addEventListener("DOMContentLoaded", () => {
+  const d = document.getElementById("sur_domain");
+  const echo = document.getElementById("sur_confirm_echo");
+  if (d && echo) echo.textContent = "the domain";
+  loadSurrenderHistory();
+});
+
+// ========================================================
 // FRONTEND INTERACTIONS - AUTOMATION WEBSERVICE BT
 // ========================================================
 

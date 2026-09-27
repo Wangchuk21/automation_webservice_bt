@@ -12,6 +12,10 @@ fastapi==0.141.1
 starlette==1.7.0
 uvicorn==0.54.0
 jinja2==3.1.6
+# Required by FastAPI to parse multipart/form-data, i.e. the surrender letter
+# upload on POST /api/v1/surrenders. Without it the app still starts, but that
+# endpoint fails at request time.
+python-multipart==0.0.20
 
 # --- Validation & config ---
 pydantic==2.13.5

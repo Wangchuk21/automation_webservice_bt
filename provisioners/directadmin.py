@@ -1,5 +1,6 @@
 import urllib.parse
 import logging
+import re
 import shlex
 from typing import Optional, Dict, Any
 import requests
@@ -7,6 +8,7 @@ import requests
 from .base import (
     BaseProvisioner,
     ProvisionerResult,
+    ValidationError,
     generate_secure_password,
     sanitize_username
 )
@@ -252,6 +254,76 @@ class DirectAdminProvisioner(BaseProvisioner):
             return sorted(list(set(clean))) if clean else ["Bronze", "SILVER", "Gold", "PLATINUM", "default"]
         except Exception:
             return ["Bronze", "SILVER", "Gold", "PLATINUM", "default"]
+
+    def account_exists(self, username: str) -> bool:
+        """
+        Read-only check for whether a DirectAdmin account exists.
+
+        Checks both the system account and the DirectAdmin user record, because
+        on this server the two are not always in step: user state lives in
+        /usr/local/directadmin/data/users/<name>/, not the older
+        /usr/local/directadmin/users/ path.
+        """
+        if not username or not re.match(r'^[a-z][a-z0-9]*$', username):
+            raise ValidationError(f"Invalid DirectAdmin username: {username!r}")
+        quoted = shlex.quote(username)
+        cmd = (
+            f"getent passwd {quoted} >/dev/null 2>&1 && echo SYS; "
+            f"test -d /usr/local/directadmin/data/users/{quoted} && echo DA"
+        )
+        try:
+            _, stdout, _ = self.ssh.execute(cmd)
+            return "SYS" in stdout or "DA" in stdout
+        except Exception as e:
+            logger.warning(f"Existence check for '{username}' failed: {e}")
+            return False
+
+    def delete_account(
+        self,
+        username: str,
+        reason: str = "Service surrender",
+        confirm: bool = False
+    ) -> Dict[str, Any]:
+        """
+        DirectAdmin does not expose a supported way to remove an account from a
+        script, so this does NOT delete anything.
+
+        DirectAdmin provides no delete-user CLI or CMD_API_* call; removal is
+        only available through the panel GUI (User Level -> Delete User). On
+        this server that means tearing down the system user, the
+        /usr/local/directadmin/data/users/<name> record, the home directory,
+        mail stores and any databases by hand, across 222 live accounts. Doing
+        that from a script risks leaving DirectAdmin's internal state
+        inconsistent (orphaned user records, broken mail routing, leftover
+        databases) and the failure would be silent.
+
+        So the surrender is recorded with its evidence and the operator is told
+        exactly what remains to be done by hand.
+        """
+        if not confirm:
+            return {
+                "success": False,
+                "message": "Refusing to record a surrender without confirm=True."
+            }
+        if not username or not re.match(r'^[a-z][a-z0-9]*$', username):
+            return {"success": False, "message": f"Invalid DirectAdmin username: {username!r}"}
+
+        if not self.account_exists(username):
+            return {
+                "success": False,
+                "message": f"Account '{username}' does not exist on {self.host}. Nothing to remove."
+            }
+
+        return {
+            "success": False,
+            "manual_action_required": True,
+            "message": (
+                f"DirectAdmin account '{username}' was NOT deleted: DirectAdmin has no "
+                f"supported scripted removal path. Delete it manually via the DirectAdmin "
+                f"panel at {self.web_url} (User Level -> Delete User). This surrender has "
+                f"been recorded for audit."
+            ),
+        }
 
     def _create_via_ssh(
         self,

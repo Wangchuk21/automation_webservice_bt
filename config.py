@@ -13,6 +13,7 @@ warnings.filterwarnings("ignore", message=".*urllib3 v2 only supports OpenSSL 1.
 env_path = Path(__file__).resolve().parent / ".env"
 load_dotenv(dotenv_path=env_path)
 
+
 class ServerConfig:
     def __init__(self, prefix: str):
         self.host = os.getenv(f"{prefix}_SERVER_HOST", "localhost")
@@ -86,5 +87,17 @@ class Config:
     NIC_URL: str = os.getenv("NIC_URL", "https://nic.bt.bt")
     NIC_USER: str = os.getenv("NIC_USER", "admin@bt.bt")
     NIC_PASSWORD: str = os.getenv("NIC_PASSWORD", "")
+
+    # --- Service surrender (termination) ---
+    # A surrender destroys customer data, so it is deliberately harder to
+    # trigger than account creation: the scanned surrender letter is required
+    # as evidence, and every action is written to an append-only audit log.
+    SURRENDER_UPLOAD_DIR: str = os.getenv("SURRENDER_UPLOAD_DIR", "./data/surrenders")
+    SURRENDER_AUDIT_LOG: str = os.getenv("SURRENDER_AUDIT_LOG", "./data/surrenders/audit.jsonl")
+    SURRENDER_MAX_UPLOAD_MB: int = int(os.getenv("SURRENDER_MAX_UPLOAD_MB", "10"))
+    SURRENDER_REQUIRE_EVIDENCE: bool = os.getenv("SURRENDER_REQUIRE_EVIDENCE", "true").lower() in ("true", "1", "yes")
+    # Accepted evidence formats. The scanner's output is a PDF or a photo of
+    # the letter, so JPEG is allowed alongside it.
+    SURRENDER_ALLOWED_EXTENSIONS: str = os.getenv("SURRENDER_ALLOWED_EXTENSIONS", ".pdf,.jpg,.jpeg")
 
 settings = Config()

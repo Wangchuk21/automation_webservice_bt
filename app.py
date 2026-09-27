@@ -1,6 +1,6 @@
 import secrets
-from fastapi import FastAPI, HTTPException, Request, Depends, Header
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi import FastAPI, HTTPException, Request, Depends, Header, Form, UploadFile, File
+from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field, field_validator
@@ -24,7 +24,16 @@ from provisioners.base import (
     ValidationError,
 )
 from notifier import send_customer_welcome_email, test_smtp_connection
-from nic_client import NICClient
+from nic_client import NICClient, split_domain_ext
+from surrender import (
+    SurrenderError,
+    perform_surrender,
+    preview_surrender,
+    store_evidence,
+    list_audits,
+    get_audit,
+    evidence_path,
+)
 
 app = FastAPI(
     title="Automation WebService BT",
@@ -57,7 +66,14 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 # left open: the dashboard must load before a token can be entered, and the
 # Docker healthcheck has no way to send headers.
 # ---------------------------------------------------------------------------
-def require_api_token(x_api_token: Optional[str] = Header(None, alias="X-API-Token")) -> None:
+def _verify_api_token(x_api_token: Optional[str]) -> None:
+    """
+    Compare a presented token against the configured one.
+
+    Kept separate from the FastAPI dependency wrappers below: calling a
+    dependency function directly would pass its `Header(...)` default object
+    rather than a string, which blows up inside compare_digest.
+    """
     expected = settings.API_AUTH_TOKEN
     if not expected:
         return  # No token configured -> open, for local use
@@ -69,6 +85,10 @@ def require_api_token(x_api_token: Optional[str] = Header(None, alias="X-API-Tok
     # Constant-time comparison to avoid leaking the token through timing.
     if not secrets.compare_digest(x_api_token, expected):
         raise HTTPException(status_code=401, detail="Invalid API token.")
+
+
+def require_api_token(x_api_token: Optional[str] = Header(None, alias="X-API-Token")) -> None:
+    _verify_api_token(x_api_token)
 
 def get_cpanel_provisioner():
     return CPanelProvisioner(
@@ -86,6 +106,28 @@ def get_cpanel_provisioner():
         default_plan=settings.CPANEL.default_plan,
         nameservers=settings.CPANEL.nameservers
     )
+
+def require_token_for_destructive(x_api_token: Optional[str] = Header(None, alias="X-API-Token")) -> None:
+    """
+    Fail closed for any operation that destroys customer data.
+
+    The rest of the API stays open when API_AUTH_TOKEN is unset, which is
+    convenient for local work but unacceptable for surrender: an instance
+    reachable on the network would let anyone destroy live hosting accounts and
+    domain registrations. So this requires the token to be configured AND
+    correctly presented, regardless of the open-API development default.
+    """
+    if not settings.API_AUTH_TOKEN:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Surrender is disabled because API_AUTH_TOKEN is not set. "
+                "Set API_AUTH_TOKEN in .env and restart; destroying customer "
+                "services must never run unauthenticated."
+            ),
+        )
+    _verify_api_token(x_api_token)
+
 
 def get_da_provisioner():
     return DirectAdminProvisioner(
@@ -322,6 +364,173 @@ async def create_account(payload: AccountCreateRequest):
             "nic_status": nic_status
         }
     }
+
+
+# ---------------------------------------------------------------------------
+# Service surrender (termination)
+#
+# A surrender removes a hosting account and/or a domain registration at the
+# customer's request. Unlike the provisioning endpoints these are gated by
+# require_token_for_destructive(), so they cannot run unauthenticated even when
+# the rest of the API is open for development.
+# ---------------------------------------------------------------------------
+class SurrenderPreviewRequest(BaseModel):
+    domain: str
+    username: Optional[str] = None
+    panel: str = "cpanel"
+    scope: str = "both"
+
+    @field_validator("domain")
+    @classmethod
+    def _check_domain(cls, v: str) -> str:
+        return validate_domain(v)
+
+    @field_validator("username")
+    @classmethod
+    def _check_username(cls, v: Optional[str]) -> Optional[str]:
+        return validate_username(v) if v else v
+
+
+@app.post("/api/v1/surrenders/preview", dependencies=[Depends(require_api_token)])
+async def preview_surrender_endpoint(payload: SurrenderPreviewRequest):
+    """
+    Report what a surrender would remove, without changing anything.
+
+    Read-only, so it uses the normal token gate: an operator should be able to
+    inspect a customer's services before deciding, including during setup.
+    """
+    panel = payload.panel.lower().strip()
+
+    def hosting_exists(username: str) -> bool:
+        if panel in ("cpanel", "whm"):
+            return get_cpanel_provisioner().account_exists(username)
+        if panel in ("directadmin", "da"):
+            return get_da_provisioner().account_exists(username)
+        return False
+
+    def domain_exists(domain: str) -> bool:
+        return NICClient().find_domain_id(*split_domain_ext(domain)) is not None
+
+    try:
+        return preview_surrender(
+            domain=payload.domain,
+            scope=payload.scope,
+            username=payload.username,
+            hosting_exists=hosting_exists,
+            domain_exists=domain_exists,
+        )
+    except SurrenderError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/v1/surrenders", dependencies=[Depends(require_token_for_destructive)])
+async def create_surrender(
+    request: Request,
+    domain: str = Form(...),
+    scope: str = Form("both"),
+    panel: str = Form("cpanel"),
+    username: Optional[str] = Form(None),
+    reason: str = Form(""),
+    confirm: bool = Form(False),
+    evidence: Optional[UploadFile] = File(None),
+):
+    """
+    Surrender the hosting account, the domain registration, or both.
+
+    Requires an explicit confirm=true and, unless disabled in configuration, a
+    scanned surrender letter as evidence. The evidence is stored and hashed, and
+    the whole operation is written to the audit log.
+    """
+    if not confirm:
+        raise HTTPException(
+            status_code=400,
+            detail="Surrender is destructive and must be confirmed: send confirm=true.",
+        )
+
+    try:
+        domain = validate_domain(domain)
+    except ValidationError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+    try:
+        if username:
+            username = validate_username(username)
+    except ValidationError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+    panel_norm = panel.lower().strip()
+    if panel_norm not in ("cpanel", "whm", "directadmin", "da"):
+        raise HTTPException(status_code=400, detail=f"Invalid panel '{panel}'.")
+
+    prov = get_cpanel_provisioner() if panel_norm in ("cpanel", "whm") else get_da_provisioner()
+
+    # Validate and persist the evidence before anything is destroyed, so a
+    # rejected upload cannot leave a half-completed surrender behind.
+    stored_evidence = None
+    if evidence is not None and evidence.filename:
+        try:
+            stored_evidence = store_evidence(evidence.file, evidence.filename)
+        except SurrenderError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+    elif settings.SURRENDER_REQUIRE_EVIDENCE:
+        raise HTTPException(
+            status_code=422,
+            detail="A scanned surrender letter (PDF or JPEG) is required as evidence.",
+        )
+
+    reason_text = (reason or "").strip() or "Service surrender"
+
+    def hosting_delete(user: str) -> Dict[str, Any]:
+        return prov.delete_account(user, reason=reason_text, confirm=True)
+
+    def domain_delete(dom: str) -> Dict[str, Any]:
+        return NICClient().delete_domain(dom, confirm=True)
+
+    try:
+        record = perform_surrender(
+            domain=domain,
+            scope=scope,
+            username=username,
+            reason=reason_text,
+            evidence=stored_evidence,
+            panel=panel_norm,
+            operator=request.headers.get("X-Operator", "api"),
+            client_ip=request.client.host if request.client else None,
+            hosting_delete=hosting_delete,
+            domain_delete=domain_delete,
+        )
+    except SurrenderError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+    # A partial or failed surrender is reported as an error status so a caller
+    # scripting against this cannot mistake it for a clean completion.
+    status_code = 200 if record.get("status") == "completed" else 409
+    return JSONResponse(status_code=status_code, content=record)
+
+
+@app.get("/api/v1/surrenders", dependencies=[Depends(require_api_token)])
+async def list_surrenders(limit: int = 100):
+    """List recent surrender records, newest first."""
+    return {"surrenders": list_audits(limit=max(1, min(limit, 500)))}
+
+
+@app.get("/api/v1/surrenders/{surrender_id}/evidence", dependencies=[Depends(require_api_token)])
+async def download_surrender_evidence(surrender_id: str):
+    """Download the surrender letter attached to a record."""
+    record = get_audit(surrender_id)
+    if not record or not record.get("evidence"):
+        raise HTTPException(status_code=404, detail="No evidence found for that surrender.")
+
+    try:
+        path = evidence_path(record["evidence"]["stored_name"])
+    except SurrenderError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+    return FileResponse(
+        path,
+        media_type=record["evidence"].get("content_type", "application/octet-stream"),
+        filename=record["evidence"].get("original_name") or path.name,
+    )
 
 
 @app.post("/api/v1/nic/test", dependencies=[Depends(require_api_token)])

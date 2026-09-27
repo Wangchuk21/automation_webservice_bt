@@ -957,3 +957,142 @@ select.custom-select:focus {
   font-family: var(--font-mono);
   font-size: 0.72rem;
 }
+
+/* ========================================================
+   SERVICE SURRENDER (termination)
+   ======================================================== */
+
+.btn-danger {
+  background: linear-gradient(135deg, var(--accent-rose), #e11d48);
+  color: white;
+  box-shadow: 0 4px 14px rgba(244, 63, 94, 0.35);
+}
+
+.btn-danger:hover {
+  background: linear-gradient(135deg, #e11d48, #be123c);
+  box-shadow: 0 6px 20px rgba(244, 63, 94, 0.45);
+  transform: translateY(-1px);
+}
+
+.btn-danger:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.surrender-card {
+  margin-top: 24px;
+  border-color: rgba(244, 63, 94, 0.28);
+}
+
+.surrender-warning {
+  background: rgba(244, 63, 94, 0.10);
+  border: 1px solid rgba(244, 63, 94, 0.32);
+  border-left: 3px solid var(--accent-rose);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  margin-bottom: 20px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: #fecdd3;
+}
+
+.surrender-warning strong {
+  color: #fda4af;
+}
+
+.surrender-preview,
+.surrender-result {
+  margin: 18px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.surrender-preview-title,
+.surrender-result h4 {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-main);
+}
+
+.surrender-step {
+  border: 1px solid var(--border-color);
+  border-left-width: 3px;
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  background: var(--bg-input);
+}
+
+.surrender-step p {
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+.surrender-step-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 13px;
+}
+
+.surrender-tag {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.surrender-step-warn { border-left-color: var(--accent-rose); }
+.surrender-step-warn .surrender-tag { background: rgba(244, 63, 94, 0.18); color: #fda4af; }
+
+.surrender-step-ok { border-left-color: var(--accent-emerald); }
+.surrender-step-ok .surrender-tag { background: rgba(16, 185, 129, 0.18); color: #6ee7b7; }
+
+.surrender-step-fail { border-left-color: var(--accent-amber); }
+.surrender-step-fail .surrender-tag { background: rgba(245, 158, 11, 0.18); color: #fcd34d; }
+
+.surrender-step-skip { border-left-color: var(--text-dim); opacity: 0.7; }
+
+.surrender-result.surrender-step-fail h4 { color: #fcd34d; }
+.surrender-result.surrender-step-warn h4 { color: #fda4af; }
+.surrender-result.surrender-step-ok h4 { color: #6ee7b7; }
+
+.surrender-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+
+.surrender-table th,
+.surrender-table td {
+  text-align: left;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border-color);
+  color: var(--text-muted);
+}
+
+.surrender-table th {
+  color: var(--text-dim);
+  text-transform: uppercase;
+  font-size: 10.5px;
+  letter-spacing: 0.07em;
+}
+
+.surrender-table code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-main);
+}
+
+.surrender-table .st-completed { color: #6ee7b7; }
+.surrender-table .st-partial { color: #fda4af; }
+.surrender-table .st-failed { color: #fcd34d; }
+.surrender-table .st-started { color: var(--accent-amber); }
