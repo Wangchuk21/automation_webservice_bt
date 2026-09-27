@@ -214,8 +214,15 @@ async function loadSuspensionReport() {
       return;
     }
 
+    const age = d.age_hours;
+    const staleNote = d.stale
+      ? ` <strong style="color:#fcd34d">⚠ STALE — last run was ${esc(age)}h ago. ` +
+        `A failed run writes no record, so this list may be out of date; check the ` +
+        `nightly job before acting.</strong>`
+      : (age !== null && age !== undefined ? ` (${esc(age)}h ago)` : "");
+
     summary.innerHTML =
-      `Last run <strong>${esc(d.generated_at)}</strong> · ` +
+      `Last run <strong>${esc(d.generated_at)}</strong>${staleNote} · ` +
       `${esc(d.total_accounts)} accounts checked · ` +
       `<strong>${esc((d.candidates || []).length)}</strong> awaiting review · ` +
       `${esc(d.already_suspended_billing)} already suspended for billing · ` +

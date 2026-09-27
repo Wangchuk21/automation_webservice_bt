@@ -140,6 +140,16 @@ class TestComposeInterpolationIsAvoided(unittest.TestCase):
         if subprocess.run(["docker", "compose", "version"], capture_output=True).returncode != 0:
             self.skipTest("docker compose v2 not available")
 
+    def _compose_down(self, tmp):
+        """Tear down the project this test created.
+
+        Without this each run leaves a Docker network behind, and after enough
+        runs the predefined address pools are exhausted -- at which point the
+        suite fails for reasons that have nothing to do with the code.
+        """
+        subprocess.run(["docker", "compose", "down", "--remove-orphans"],
+                       capture_output=True, text=True, cwd=tmp)
+
     def test_escaped_value_survives_compose(self):
         secret = "$Secret$@abcd"
         with tempfile.TemporaryDirectory() as tmp:
@@ -156,6 +166,7 @@ class TestComposeInterpolationIsAvoided(unittest.TestCase):
                 ["docker", "compose", "-f", str(Path(tmp) / "docker-compose.yml"), "run", "--rm", "t"],
                 capture_output=True, text=True, cwd=tmp,
             )
+            self._compose_down(tmp)
             self.assertEqual(out.returncode, 0, out.stderr[-300:])
             got = out.stdout.strip().splitlines()[-1]
             self.assertEqual(got, str(len(secret)),
@@ -183,6 +194,7 @@ class TestComposeInterpolationIsAvoided(unittest.TestCase):
                 ["docker", "compose", "-f", str(Path(tmp) / "docker-compose.yml"), "run", "--rm", "t"],
                 capture_output=True, text=True, cwd=tmp,
             )
+            self._compose_down(tmp)
             got = out.stdout.strip().splitlines()[-1]
             self.assertNotEqual(got, str(len(secret)),
                                 "unescaped '$' no longer breaks; revisit the $$ convention")

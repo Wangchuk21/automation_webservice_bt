@@ -687,9 +687,25 @@ async def suspension_report():
                        "has not completed, or BSCS was not reachable.",
         }
     counts = rec.get("counts", {})
+    # Age the report. A run that failed (BSCS unreachable, VPN down) writes no
+    # record at all, so without this the dashboard would happily show a
+    # week-old list as if it were current -- and someone could act on it.
+    generated = rec.get("generated_at")
+    age_hours = None
+    if generated:
+        try:
+            from datetime import datetime as _dt
+            gen = _dt.fromisoformat(generated)
+            if gen.tzinfo is None:
+                gen = gen.astimezone()
+            age_hours = round((_dt.now(gen.tzinfo) - gen).total_seconds() / 3600.0, 1)
+        except (ValueError, TypeError):
+            age_hours = None
     return {
         "available": True,
-        "generated_at": rec.get("generated_at"),
+        "generated_at": generated,
+        "age_hours": age_hours,
+        "stale": bool(age_hours is not None and age_hours > 26),
         "total_accounts": rec.get("total_accounts", 0),
         "bscs_complete": rec.get("bscs_complete", True),
         "bscs_note": rec.get("bscs_note", ""),

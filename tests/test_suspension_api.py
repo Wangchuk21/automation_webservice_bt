@@ -174,6 +174,38 @@ class SuspendAPITest(unittest.TestCase):
             finally:
                 settings.SUSPENSION_AUDIT_LOG = orig
 
+    def test_report_reports_age_and_staleness(self):
+        """A failed run writes no record, so without an age the dashboard would
+        show a week-old list as if it were current."""
+        from datetime import datetime, timedelta, timezone
+        old = (datetime.now(timezone.utc) - timedelta(hours=40)).isoformat()
+        fresh = datetime.now(timezone.utc).isoformat()
+        base = {"total_accounts": 1, "bscs_complete": True, "bscs_note": "",
+                "counts": {}, "unmatched_contracts": [],
+                "decisions": [{"panel": "cpanel", "username": "a", "domain": "a.bt",
+                               "action": "suspend", "contract": "", "reason": "",
+                               "current_state": "", "bscs_customer": ""}]}
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "audit.jsonl"
+            orig = settings.SUSPENSION_AUDIT_LOG
+            try:
+                log.write_text(json.dumps({**base, "generated_at": fresh}) + "\n")
+                settings.SUSPENSION_AUDIT_LOG = str(log)
+                d = self.client.get("/api/v1/suspension/report",
+                                    headers={"X-API-Token": self.TOKEN}).json()
+                self.assertFalse(d["stale"])
+                self.assertIsNotNone(d["age_hours"])
+                self.assertLess(d["age_hours"], 1)
+
+                log.write_text(json.dumps({**base, "generated_at": old}) + "\n")
+                settings.SUSPENSION_AUDIT_LOG = str(log)
+                d = self.client.get("/api/v1/suspension/report",
+                                    headers={"X-API-Token": self.TOKEN}).json()
+                self.assertTrue(d["stale"], "a 40h-old report must be flagged stale")
+                self.assertGreater(d["age_hours"], 26)
+            finally:
+                settings.SUSPENSION_AUDIT_LOG = orig
+
     def test_report_flags_incomplete_run(self):
         with tempfile.TemporaryDirectory() as tmp:
             log = Path(tmp) / "audit.jsonl"

@@ -95,6 +95,13 @@ services:
     env_file:
       - .env
 
+    # cron reads /etc/cron.d in the container's timezone, and the base image
+    # defaults to UTC. Without this, "17 2 * * *" means 08:17 in Thimphu, and
+    # anyone reading the schedule later would be misled. Bhutan Time is UTC+6
+    # with no daylight saving, so it never shifts.
+    environment:
+      TZ: Asia/Thimphu
+
     depends_on:
       - provisioner
 
