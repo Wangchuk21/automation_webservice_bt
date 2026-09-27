@@ -45,6 +45,26 @@ app = FastAPI(
     version="1.0.0"
 )
 
+
+@app.middleware("http")
+async def no_stale_assets(request: Request, call_next):
+    """
+    Force the browser to revalidate the dashboard and its assets.
+
+    Without an explicit Cache-Control, browsers apply heuristic freshness from
+    Last-Modified and can serve a stale app.js after a redeploy. The symptom is
+    a dashboard that renders new markup but whose JavaScript never runs the
+    matching code, leaving panels stuck on "Loading..." with no error anywhere.
+    Cheap to revalidate, and this is an internal ops tool where showing stale
+    state would be actively misleading.
+    """
+    response = await call_next(request)
+    path = request.url.path
+    if path == "/" or path.startswith("/static") or path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-cache, must-revalidate"
+    return response
+
+
 BASE_DIR = Path(__file__).resolve().parent
 TEMPLATES_DIR = BASE_DIR / "templates"
 STATIC_DIR = BASE_DIR / "static"
