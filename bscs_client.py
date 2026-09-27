@@ -124,9 +124,14 @@ class BSCSClient:
         timeout: Optional[int] = None,
         verify_ssl: Optional[bool] = None,
     ):
-        self.base_url = (base_url or getattr(settings, "BSCS_BASE_URL", "")).rstrip("/")
-        self.username = username or getattr(settings, "BSCS_USERNAME", "")
-        self.password = password or getattr(settings, "BSCS_PASSWORD", "")
+        # "is not None" rather than "or": an explicitly empty value must be
+        # honoured, not silently replaced from settings. With "or", passing
+        # username="" to mean "unconfigured" would quietly pick up the real
+        # credential from .env instead.
+        self.base_url = (base_url if base_url is not None
+                         else getattr(settings, "BSCS_BASE_URL", "")).rstrip("/")
+        self.username = username if username is not None else getattr(settings, "BSCS_USERNAME", "")
+        self.password = password if password is not None else getattr(settings, "BSCS_PASSWORD", "")
         self.timeout = timeout or getattr(settings, "BSCS_TIMEOUT", 45)
         self.verify = getattr(settings, "BSCS_VERIFY_SSL", True) if verify_ssl is None else verify_ssl
         self.max_results = getattr(settings, "BSCS_MAX_RESULTS", 25)

@@ -188,6 +188,133 @@ document.addEventListener("DOMContentLoaded", () => {
 });
 
 // ========================================================
+// SUSPENSION REVIEW
+// The nightly job detects; an operator acts from here.
+// ========================================================
+
+async function loadSuspensionReport() {
+  const summary = document.getElementById("suspension-summary");
+  const cands = document.getElementById("suspension-candidates");
+  const un = document.getElementById("suspension-unmatched");
+  if (!summary) return;
+
+  try {
+    const res = await fetch("/api/v1/suspension/report", { headers: apiHeaders() });
+    if (!res.ok) {
+      summary.textContent = `Report unavailable (HTTP ${res.status}).`;
+      cands.textContent = "";
+      un.textContent = "";
+      return;
+    }
+    const d = await res.json();
+    if (!d.available) {
+      summary.textContent = d.message;
+      cands.textContent = "";
+      un.textContent = "";
+      return;
+    }
+
+    summary.innerHTML =
+      `Last run <strong>${esc(d.generated_at)}</strong> · ` +
+      `${esc(d.total_accounts)} accounts checked · ` +
+      `<strong>${esc((d.candidates || []).length)}</strong> awaiting review · ` +
+      `${esc(d.already_suspended_billing)} already suspended for billing · ` +
+      `${esc(d.suspended_other_reason)} suspended for other reasons (left alone) · ` +
+      `${esc(d.no_match)} no billing match` +
+      (d.bscs_complete ? "" : ` <strong style="color:#fcd34d">· INCOMPLETE: ${esc(d.bscs_note)}</strong>`);
+
+    renderSuspensionCandidates(d.candidates || []);
+    renderUnmatched(d.unmatched_contracts || []);
+  } catch (e) {
+    summary.textContent = e.message;
+  }
+}
+
+function renderSuspensionCandidates(candidates) {
+  const box = document.getElementById("suspension-candidates");
+  if (!candidates.length) {
+    box.innerHTML = '<span class="form-hint">Nothing awaiting review.</span>';
+    return;
+  }
+  box.innerHTML = `<table class="surrender-table">
+    <thead><tr><th>Panel</th><th>Account</th><th>Domain</th><th>Contract</th><th>Action</th></tr></thead>
+    <tbody>${candidates.map((c) => `<tr>
+      <td>${esc(c.panel)}</td>
+      <td>${esc(c.username)}</td>
+      <td><strong>${esc(c.domain)}</strong></td>
+      <td><code>${esc(c.contract || "-")}</code></td>
+      <td><button class="btn btn-danger btn-sm"
+            data-panel="${esc(c.panel)}" data-user="${esc(c.username)}"
+            onclick="suspendNow('${esc(c.panel)}','${esc(c.username)}')">Suspend</button></td>
+    </tr>`).join("")}</tbody></table>`;
+}
+
+function renderUnmatched(rows) {
+  const box = document.getElementById("suspension-unmatched");
+  if (!rows.length) {
+    box.innerHTML = '<span class="form-hint">None — every lapsed contract matched an account.</span>';
+    return;
+  }
+  box.innerHTML = `<table class="surrender-table">
+    <thead><tr><th>Contract</th><th>Customer record</th><th>Domains found</th></tr></thead>
+    <tbody>${rows.map((r) => `<tr>
+      <td><code>${esc(r.contract || "-")}</code></td>
+      <td>${esc(r.name_field || "-")}</td>
+      <td>${esc((r.domains_found || []).join(", ") || "none")}</td>
+    </tr>`).join("")}</tbody></table>`;
+}
+
+async function suspendNow(panel, username) {
+  if (!window.confirm(
+    `Suspend ${username} on ${panel}?\n\nThis takes the customer's website offline. ` +
+    `The panel state is re-checked first, and an account already suspended ` +
+    `(for abuse, for example) will be refused rather than relabelled.`
+  )) {
+    return;
+  }
+
+  const fd = new FormData();
+  fd.append("panel", panel);
+  fd.append("username", username);
+  fd.append("reason", "billing");
+  fd.append("confirm", "true");
+
+  const box = document.getElementById("suspension-result");
+  box.classList.remove("hidden");
+  box.innerHTML = '<span class="form-hint">Working…</span>';
+
+  try {
+    const res = await fetch("/api/v1/suspension/suspend", {
+      method: "POST",
+      headers: apiHeaders(),
+      body: fd,
+    });
+    const data = await res.json();
+    if (res.ok) {
+      box.className = "surrender-result surrender-step-ok";
+      box.innerHTML = `<h4>Suspended</h4><p>${esc(data.message)}</p>`;
+      showToast(`Suspended ${username}`, "success");
+    } else {
+      const msg = (data && (data.detail || data.message)) || `HTTP ${res.status}`;
+      // 409 is the expected refusal: already suspended, so nothing was changed.
+      const isRefusal = res.status === 409;
+      box.className = `surrender-result ${isRefusal ? "surrender-step-warn" : "surrender-step-fail"}`;
+      box.innerHTML = `<h4>${isRefusal ? "Left untouched" : "Failed"}</h4><p>${esc(msg)}</p>`;
+      showToast(isRefusal ? "Account already suspended — nothing changed" : "Suspension failed",
+                isRefusal ? "error" : "error");
+    }
+    await loadSuspensionReport();
+  } catch (e) {
+    box.className = "surrender-result surrender-step-fail";
+    box.innerHTML = `<h4>Failed</h4><p>${esc(e.message)}</p>`;
+  }
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  loadSuspensionReport();
+});
+
+// ========================================================
 // FRONTEND INTERACTIONS - AUTOMATION WEBSERVICE BT
 // ========================================================
 

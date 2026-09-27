@@ -26,6 +26,9 @@ from provisioners.base import (
 from notifier import send_customer_welcome_email, test_smtp_connection
 from nic_client import NICClient, split_domain_ext
 from bscs_client import BSCSClient, BSCSError
+from suspension import (
+    SKIP_ALREADY_BILLING, SKIP_NO_MATCH, SKIP_OTHER_REASON, SUSPEND, latest_report,
+)
 from surrender import (
     SurrenderError,
     perform_surrender,
@@ -620,6 +623,116 @@ async def bscs_search_contracts(payload: BscsSearchRequest):
     if not customer_id:
         raise HTTPException(status_code=422, detail="customer_id is required to search contracts.")
     return get_bscs_client().search_contracts(customer_id, **criteria)
+
+
+# ---------------------------------------------------------------------------
+# Suspension review
+#
+# The nightly job detects and records; an operator acts from the dashboard.
+# That split is deliberate. The BSCS domain join is name-based and only about
+# half of lapsed contracts resolve to an account, so acting automatically
+# would sometimes be wrong. Detection is cheap and safe to automate; the
+# decision is not.
+#
+# The safety rules are enforced HERE, server-side, not in the browser. A crafted
+# request cannot suspend an account that is already suspended, and can never
+# overwrite a non-billing reason.
+# ---------------------------------------------------------------------------
+class SuspendRequest(BaseModel):
+    """Declared for documentation and for the CLI; the HTTP endpoint takes form
+    fields so the dashboard can post multipart without constructing JSON."""
+
+    panel: str = Field(..., description="'cpanel' or 'directadmin'")
+    username: str = Field(..., description="Hosting account name")
+    confirm: bool = Field(False, description="Must be true to act")
+    reason: str = Field("billing", description="Reason recorded on the panel")
+
+    @field_validator("username")
+    @classmethod
+    def _check_username(cls, v: str) -> str:
+        return validate_username(v)
+
+
+@app.get("/api/v1/suspension/report", dependencies=[Depends(require_api_token)])
+async def suspension_report():
+    """
+    The most recent detection run: candidates, already-suspended counts, and
+    the lapsed contracts that could NOT be matched to an account.
+    """
+    rec = latest_report()
+    if not rec:
+        return {
+            "available": False,
+            "message": "No suspension run has been recorded yet. The scheduled job "
+                       "has not completed, or BSCS was not reachable.",
+        }
+    counts = rec.get("counts", {})
+    return {
+        "available": True,
+        "generated_at": rec.get("generated_at"),
+        "total_accounts": rec.get("total_accounts", 0),
+        "bscs_complete": rec.get("bscs_complete", True),
+        "bscs_note": rec.get("bscs_note", ""),
+        "candidates": [d for d in rec.get("decisions", []) if d.get("action") == SUSPEND],
+        "already_suspended_billing": counts.get(SKIP_ALREADY_BILLING, 0),
+        "suspended_other_reason": counts.get(SKIP_OTHER_REASON, 0),
+        "no_match": counts.get(SKIP_NO_MATCH, 0),
+        "unmatched_contracts": rec.get("unmatched_contracts", []),
+    }
+
+
+@app.post("/api/v1/suspension/suspend", dependencies=[Depends(require_token_for_destructive)])
+async def suspend_account_now(
+    panel: str = Form(...),
+    username: str = Form(...),
+    confirm: bool = Form(False),
+    reason: str = Form("billing"),
+):
+    """
+    Suspend one account, after re-checking its state on the panel.
+
+    The state is re-read here rather than trusted from the report, so an
+    account that was suspended manually since the last run -- for abuse, spam
+    or anything else -- is refused rather than relabelled as billing.
+    """
+    if not confirm:
+        raise HTTPException(status_code=400,
+                            detail="Suspension is destructive: send confirm=true.")
+
+    try:
+        username = validate_username(username)
+    except ValidationError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+    panel_norm = panel.lower().strip()
+    if panel_norm in ("cpanel", "whm"):
+        prov = get_cpanel_provisioner()
+        state = prov.account_state(username)
+    elif panel_norm in ("directadmin", "da"):
+        prov = get_da_provisioner()
+        state = prov.account_state(username)
+    else:
+        raise HTTPException(status_code=400, detail="Invalid panel.")
+
+    if state is None:
+        raise HTTPException(status_code=404,
+                            detail=f"Account '{username}' was not found on {panel_norm}.")
+
+    if state["suspended"]:
+        # This is the safety rule that protects the abuse cases: an account
+        # already suspended keeps its reason and is never relabelled.
+        raise HTTPException(
+            status_code=409,
+            detail=(f"'{username}' is already suspended "
+                    f"(reason: {state['reason'] or 'not recorded'}). Left untouched."),
+        )
+
+    result = prov.suspend_account(username, reason=reason, confirm=True)
+    if not result.get("success"):
+        raise HTTPException(status_code=500, detail=result.get("message", "Suspension failed."))
+
+    return {"success": True, "message": result.get("message", ""),
+            "panel": panel_norm, "username": username, "domain": state.get("domain", "")}
 
 
 @app.post("/api/v1/nic/test", dependencies=[Depends(require_api_token)])

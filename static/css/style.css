@@ -1096,3 +1096,6 @@ select.custom-select:focus {
 .surrender-table .st-partial { color: #fda4af; }
 .surrender-table .st-failed { color: #fcd34d; }
 .surrender-table .st-started { color: var(--accent-amber); }
+
+.suspension-review-candidates td { vertical-align: middle; }
+.suspension-review-candidates .btn-sm { padding: 5px 12px; font-size: 12px; }

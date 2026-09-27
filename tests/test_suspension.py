@@ -164,6 +164,34 @@ class TestDecisionMatrix(unittest.TestCase):
         self.assertFalse(r.bscs_complete)
         self.assertEqual(r.bscs_note, "capped")
 
+    def test_contract_matched_twice_is_not_also_listed_as_unmatched(self):
+        """One account can match two contracts; the joined display string must
+        not make each contract look unmatched as well."""
+        lapsed_result = {
+            "domains": {"test.bt"}, "complete": True, "note": "",
+            "rows": [
+                {"contract": "C1", "name_field": "www.test.bt", "domains": ["test.bt"]},
+                {"contract": "C2", "name_field": "www.test.bt", "domains": ["test.bt"]},
+            ],
+        }
+        r = decide([acct(username="t", domain="test.bt")], lapsed_result)
+        self.assertEqual(r.decisions[0].action, SUSPEND)
+        self.assertEqual(r.unmatched_contracts, [],
+                         "both contracts matched the account, so neither is unmatched")
+
+    def test_genuinely_unmatched_contract_is_recorded(self):
+        lapsed_result = {
+            "domains": {"a.bt"}, "complete": True, "note": "",
+            "rows": [
+                {"contract": "C1", "name_field": "www.a.bt", "domains": ["a.bt"]},
+                {"contract": "C2", "name_field": "Jamtsho, Karma", "domains": []},
+            ],
+        }
+        r = decide([acct(username="a", domain="a.bt")], lapsed_result)
+        self.assertEqual(len(r.unmatched_contracts), 1)
+        self.assertEqual(r.unmatched_contracts[0]["contract"], "C2")
+        self.assertEqual(r.unmatched_contracts[0]["name_field"], "Jamtsho, Karma")
+
     def test_counts(self):
         accounts = [
             acct(username="a", domain="a.bt"),

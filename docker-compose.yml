@@ -52,6 +52,12 @@ services:
       # read_only: true stay in place. Keep it backed up: it is the record of
       # who surrendered what, and the only copy of the letters.
       - surrender_data:/app/data
+      # The suspension audit trail, written by the suspender job. Must be the
+      # SAME volume at the SAME path, or the dashboard reports "no run recorded"
+      # while the job is writing records this service cannot see. It is mounted
+      # at its own path rather than under /app/data so the two audit trails stay
+      # separate.
+      - suspension_audit:/app/suspension
 
     # The root filesystem is read-only: no database, no code uploads, no
     # mutable state outside the volume mounted above. The only writes are
@@ -95,9 +101,10 @@ services:
     # SSH key for the cPanel server, read-only, as the provisioner service uses.
     volumes:
       - ~/.ssh:/home/provisioner/.ssh:ro
-      # The suspension audit trail. Separate from the surrender evidence volume
-      # because the record shapes differ.
-      - suspension_audit:/app/data
+      # The suspension audit trail. Must be the SAME volume the suspender
+      # writes to, otherwise the dashboard reports "no run recorded" while the
+      # job is writing records the web service cannot see.
+      - suspension_audit:/app/suspension
 
     # cron must start as root so it can drop privileges to run the job as
     # "provisioner" -- running cron unprivileged fails with "seteuid:

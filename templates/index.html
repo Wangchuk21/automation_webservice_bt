@@ -486,6 +486,41 @@
       </div>
     </section>
 
+    <!-- Suspension review: the job detects, an operator acts -->
+    <section class="card form-card surrender-card" id="suspension-review">
+      <div class="card-header">
+        <div class="card-icon">🛑</div>
+        <div>
+          <h2 class="card-title">Suspended Hosting — Review</h2>
+          <p class="card-subtitle">Accounts the nightly job found with lapsed billing</p>
+        </div>
+      </div>
+
+      <div class="surrender-warning">
+        <strong>This switches off a live customer website.</strong>
+        The nightly job only <em>detects</em> — nothing is suspended automatically,
+        because the match between a lapsed billing contract and a hosting account is
+        made by name and is not always reliable. Check the domain, then suspend.
+      </div>
+
+      <div id="suspension-summary" class="form-hint">Loading…</div>
+      <div id="suspension-result" class="surrender-result hidden"></div>
+
+      <h4 class="surrender-preview-title">Candidates</h4>
+      <div id="suspension-candidates" class="form-hint">Loading…</div>
+
+      <h4 class="surrender-preview-title" style="margin-top:22px">
+        Lapsed contracts with no matching account
+      </h4>
+      <p class="form-hint">
+        The billing system says these are lapsed, but no account on our panels could be
+        matched to them — usually because the customer record holds a person's name
+        rather than a domain. Chase these with billing; they are never suspended
+        automatically.
+      </p>
+      <div id="suspension-unmatched" class="form-hint">Loading…</div>
+    </section>
+
     <!-- Quick Documentation / CLI reference -->
     <section id="quick-docs" class="card docs-card">
       <h3 class="docs-title">⚡ Command Line Automation & API</h3>

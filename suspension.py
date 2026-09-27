@@ -111,6 +111,10 @@ class Decision:
 class RunReport:
     decisions: List[Decision] = field(default_factory=list)
     skipped_errors: List[str] = field(default_factory=list)
+    # Lapsed BSCS contracts that matched no account we manage. Kept so the
+    # blind spot in the name-based join is visible to an operator instead of
+    # silently dropping customers who are genuinely lapsed.
+    unmatched_contracts: List[Dict[str, Any]] = field(default_factory=list)
     bscs_complete: bool = True
     bscs_note: str = ""
     total_accounts: int = 0
@@ -129,6 +133,7 @@ class RunReport:
             "bscs_note": self.bscs_note,
             "counts": self.counts(),
             "skipped_errors": self.skipped_errors,
+            "unmatched_contracts": self.unmatched_contracts,
             "decisions": [asdict(d) for d in self.decisions],
         }
 
@@ -329,6 +334,29 @@ def decide(accounts: Sequence[Dict[str, Any]], lapsed: Dict[str, Any]) -> RunRep
             contract=contracts, bscs_customer=customers,
         ))
 
+    # Anything BSCS says is lapsed that we could not line up with an account.
+    # Recorded rather than dropped: a contract here may well be a real customer
+    # whose record simply has no domain in it.
+    #
+    # One account can match several contracts, and Decision.contract holds them
+    # comma-joined for display, so the set is built by splitting on commas --
+    # otherwise a matched contract would also be listed as unmatched.
+    matched_contracts = set()
+    for d in report.decisions:
+        if d.contract:
+            matched_contracts.update(c.strip() for c in d.contract.split(",") if c.strip())
+    for row in lapsed.get("rows", []):
+        contract = row.get("contract", "")
+        if contract and contract in matched_contracts:
+            continue
+        report.unmatched_contracts.append({
+            "contract": contract,
+            "customer_code": row.get("customer_code", ""),
+            "public_key": row.get("public_key", ""),
+            "name_field": row.get("name_field", ""),
+            "domains_found": row.get("domains", []),
+        })
+
     return report
 
 
@@ -381,6 +409,49 @@ def execute(
             "contract": d.contract,
         })
     return {"dry_run": dry_run, "results": results}
+
+
+def latest_report(path: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """
+    Most recent completed run from the audit log, or None.
+
+    Reads the log backwards for the newest record that has decisions, so the
+    dashboard shows the last real run rather than a partial line.
+    """
+    target = Path(path or settings.SUSPENSION_AUDIT_LOG).expanduser()
+    if not target.is_file():
+        return None
+    try:
+        lines = target.read_text(encoding="utf-8").splitlines()
+    except OSError as e:
+        logger.error("Failed to read suspension audit log: %s", e)
+        return None
+    for line in reversed(lines):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if rec.get("decisions"):
+            return rec
+    return None
+
+
+def unmatched_lapsed(path: Optional[str] = None) -> List[Dict[str, Any]]:
+    """
+    Lapsed BSCS contracts that did NOT resolve to an account we manage.
+
+    This is the blind spot in the join, surfaced rather than hidden. A contract
+    whose customer record holds only a person's name yields no domain, so the
+    account can never be matched automatically -- but an operator reading the
+    dashboard can recognise the name and act, or chase it with billing.
+    """
+    rec = latest_report(path)
+    if not rec:
+        return []
+    return rec.get("unmatched_contracts", []) or []
 
 
 def write_audit(report: RunReport, execution: Dict[str, Any], path: Optional[str] = None) -> str:
