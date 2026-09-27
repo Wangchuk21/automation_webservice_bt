@@ -236,13 +236,18 @@ class DirectAdminProvisioner(BaseProvisioner):
 
         # SSH fallback
         cmd = "ls -1 /usr/local/directadmin/data/users/admin/packages/ 2>/dev/null | sed 's/\\.pkg$//'"
+        # Supply the sudo password on stdin rather than echoing it into the
+        # command, where it would be visible in the remote process list to
+        # every other user on the box.
+        sudo_stdin = None
         if self.ssh_user != "root":
             if self.ssh_password:
-                cmd = f"echo '{self.ssh_password}' | sudo -S sh -c \"{cmd}\""
+                cmd = "sudo -S -p '' sh -c " + shlex.quote(cmd)
+                sudo_stdin = self.ssh_password + "\n"
             else:
-                cmd = f"sudo -n sh -c \"{cmd}\""
+                cmd = "sudo -n sh -c " + shlex.quote(cmd)
         try:
-            code, stdout, stderr = self.ssh.execute(cmd)
+            code, stdout, stderr = self.ssh.execute(cmd, stdin_data=sudo_stdin)
             clean = [l.strip() for l in stdout.splitlines() if l.strip() and not l.startswith("[sudo]")]
             return sorted(list(set(clean))) if clean else ["Bronze", "SILVER", "Gold", "PLATINUM", "default"]
         except Exception:
