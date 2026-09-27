@@ -25,6 +25,8 @@ Instead of manually navigating through cPanel or DirectAdmin web interfaces, thi
   - **REST API**: Webhook-ready JSON API (`POST /api/v1/accounts/create`) for billing or CRM integration.
 - **Dry-Run Simulation**: Test account generation and credential preview without touching live production servers.
 - **Optional Automated Emailing**: Send the welcome email with credentials directly to the customer via SMTP.
+- **Service Surrender (Termination)**: Retire a hosting account, a domain registration, or both,
+  with a scanned surrender letter attached as evidence and every action written to an audit log.
 
 ---
 
@@ -38,9 +40,10 @@ automation_webservice_bt/
 ├── tls_config.py              # Shared TLS verification settings
 ├── notifier.py                # Email dispatcher for customer welcome letters
 ├── nic_client.py              # nic.bt.bt domain registry client
+├── surrender.py               # Surrender service: evidence, audit log, orchestration
 ├── requirements.txt           # Python dependencies (exact pins)
 ├── Dockerfile                 # Multi-stage container build
-├── docker-compose.yml         # Container orchestration
+├── docker-compose.yml         # Container orchestration (Compose v2: `docker compose`)
 ├── .dockerignore              # Keeps secrets & host artifacts out of image
 ├── .env.example               # Server credentials & host configuration template
 ├── provisioners/
@@ -50,10 +53,22 @@ automation_webservice_bt/
 │   └── directadmin.py         # DirectAdmin automation engine
 ├── templates/
 │   └── index.html             # Sleek dark-mode dashboard
+├── tests/
+│   ├── test_surrender.py      # Evidence validation, ordering, audit trail
+│   └── test_surrender_api.py  # HTTP endpoints, auth gate (servers stubbed)
 └── static/
     ├── css/style.css          # Modern styling & animations
     └── js/app.js              # Interactive UI & clipboard copy helpers
 ```
+
+Run the tests with:
+
+```bash
+./venv/bin/python -m unittest discover -s tests -v
+```
+
+They never contact a live server — the panel and registry steps are injected as
+fakes, so the whole suite is safe to run anywhere.
 
 ---
 
@@ -63,19 +78,24 @@ The service is stateless — no database, no volumes, no persistent state — so
 containerizes cleanly. Reproducible builds come from the exact pins in
 `requirements.txt`.
 
+> **Exception:** surrender evidence and the audit log are written to
+> `./data/surrenders` inside the container. Mount that path to a volume if you
+> use surrender, or the letters and the audit trail are lost when the container
+> is replaced.
+
 ```bash
 cp .env.example .env      # then fill in real server credentials
-docker-compose up -d --build
-docker-compose logs -f
+docker compose up -d --build
+docker compose logs -f
 ```
 
 The service is then on **http://127.0.0.1:8000**.
 
 ```bash
-docker-compose ps                 # health status
-docker-compose restart            # survives restarts
-docker-compose down               # stop
-docker-compose down --rmi local   # stop and remove the image
+docker compose ps                 # health status
+docker compose restart            # survives restarts
+docker compose down               # stop
+docker compose down --rmi local   # stop and remove the image
 ```
 
 ### TLS certificate verification
@@ -163,8 +183,8 @@ in `.env`.
 ### Running the CLI in a container
 
 ```bash
-docker-compose run --rm provisioner python cli.py test --panel cpanel
-docker-compose run --rm provisioner python cli.py create \
+docker compose run --rm provisioner python cli.py test --panel cpanel
+docker compose run --rm provisioner python cli.py create \
   --panel cpanel --domain client.bt --email client@client.bt --dry-run
 ```
 
@@ -177,9 +197,21 @@ docker-compose run --rm provisioner python cli.py create \
 - `.dockerignore` excludes `.env`, `venv/`, `.git/`, and `__pycache__`, so no credentials or host artifacts enter the image
 - `HEALTHCHECK` hits `/api/v1/health`, which touches no external server
 
-> **Note:** `docker-compose.yml` uses v1 syntax (`version: "3.8"`) for the legacy
-> `docker-compose` binary. The v2 `docker compose` plugin also works and will
-> warn that `version` is obsolete.
+> **Use Compose v2** (`docker compose`). The legacy `docker-compose` v1 binary
+> cannot talk to Docker Engine 25+; it fails with `KeyError: 'ContainerConfig'`
+> *after* it has already stopped the running container, which takes the service
+> down. It has been removed from this host.
+>
+> ### Secret values containing `$`
+>
+> Compose treats `$NAME` inside an env value as a variable reference and
+> silently replaces it with an empty string, so a password containing `$` would
+> reach the container truncated with no error. Store such values with Compose's
+> `$$` escape (`$$` -> a literal `$`); `config.py` unescapes them for the host
+> so the CLI and the container see identical values. This currently affects
+> `NIC_PASSWORD`. Related: do **not** quote values in `.env` -- python-dotenv
+> strips quotes but Docker's `env_file` does not, which silently corrupted
+> `NIC_PASSWORD` and `SMTP_PASSWORD` before.
 
 ---
 
@@ -300,6 +332,107 @@ curl -X POST http://localhost:8000/api/v1/accounts/create \
   }
 }
 ```
+
+---
+
+## 🛑 Service Surrender (Termination)
+
+Retire a service at the customer's request. Available from the dashboard, the
+CLI, and the REST API. You choose the scope:
+
+| Scope | Removes |
+|---|---|
+| `hosting` | The hosting account: files, mail, databases. Leaves the domain registered. |
+| `domain` | The domain registration at nic.bt.bt. Leaves the hosting account in place. |
+| `both` | Both of the above. |
+
+### How it is guarded
+
+- **The scanned surrender letter is required** (PDF or JPEG), matching the
+  process your customer email describes — a letter submitted to the office
+  before the next billing date. Set `SURRENDER_REQUIRE_EVIDENCE=false` to
+  waive it.
+- **Uploads are validated by content, not by filename.** A PHP payload renamed
+  to `letter.pdf` is rejected. The stored filename is generated server-side, so
+  a hostile name cannot escape the upload directory. Size is capped while
+  streaming, so an oversized file is never fully written.
+- **Every action is audited.** A `started` record is written *before* anything
+  is destroyed, so an interrupted run still leaves a trace. Each record carries
+  the reference id, operator, client IP, reason, and the evidence SHA-256.
+- **`POST /api/v1/surrenders` refuses to run at all unless `API_AUTH_TOKEN` is
+  set**, answering `503`. The rest of the API tolerates an unset token for local
+  development; surrender never does, because it destroys customer data.
+- **Partial failures are visible.** The response is `409` with
+  `"status": "partial"` and the per-step results, rather than a cheerful
+  success. A failed registry step never masks a successful hosting step.
+- **Hosting is always surrendered before the domain.** The registration is the
+  harder asset to restore, so it goes last — a mid-way failure leaves the
+  customer still holding the domain.
+
+### Dashboard
+
+The **Service Surrender** card on the dashboard has a *Preview Impact* button
+that reports what exists and what would be removed, without changing anything.
+Surrendering then requires typing the domain exactly, attaching the letter, and
+confirming a browser dialog.
+
+### CLI
+
+```bash
+# Both services, with evidence
+python3 cli.py surrender \
+  --domain customer.bt \
+  --scope both \
+  --panel cpanel \
+  --username customer \
+  --reason "Surrender letter BT/2026/114" \
+  --evidence ./surrender-letter.pdf \
+  --yes
+
+# Domain registration only
+python3 cli.py surrender --domain customer.bt --scope domain --evidence ./letter.pdf --yes
+```
+
+Omit `--yes` and it prints the target and aborts. A `.php` file renamed to
+`.pdf` is refused before any server is contacted.
+
+### REST API
+
+```bash
+curl -X POST http://localhost:8000/api/v1/surrenders \
+  -H "X-API-Token: $API_AUTH_TOKEN" \
+  -F domain=customer.bt \
+  -F scope=both \
+  -F panel=cpanel \
+  -F username=customer \
+  -F reason="Surrender letter BT/2026/114" \
+  -F confirm=true \
+  -F evidence=@./surrender-letter.pdf
+```
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /api/v1/surrenders/preview` | What would be removed. Read-only. |
+| `POST /api/v1/surrenders` | Surrender. Requires `confirm=true` and evidence. |
+| `GET /api/v1/surrenders` | Audit history, newest first. |
+| `GET /api/v1/surrenders/{id}/evidence` | Download the attached letter. |
+
+### ⚠️ DirectAdmin is recorded, not deleted
+
+DirectAdmin exposes no supported way to remove an account from a script — there
+is no delete-user CLI and no `CMD_API_*` call for it; removal is only available
+through the panel GUI. On this server that would mean hand-removing the system
+user, the `/usr/local/directadmin/data/users/<name>` record, the home directory,
+mail stores and databases across 222 live accounts, which risks silently
+corrupting DirectAdmin's internal state.
+
+So a DirectAdmin surrender is **recorded with its evidence and flagged
+`manual_action_required`**, and the response tells the operator to delete the
+account via the DirectAdmin panel (User Level → Delete User). Nothing is
+destroyed automatically.
+
+cPanel is fully automated via `whmapi1 removeacct`, and nic.bt.bt via the
+portal's own `_method=DELETE` route.
 
 ---
 
