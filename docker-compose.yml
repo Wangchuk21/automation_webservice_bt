@@ -129,6 +129,17 @@ services:
     # -f runs cron in the foreground so the container's lifetime is cron's.
     command: ["cron", "-f"]
 
+    # The image's HEALTHCHECK probes http://127.0.0.1:8000/api/v1/health, which
+    # this container does not serve -- it runs cron, not the web service, so it
+    # inherited a check that can never pass and reported "unhealthy" forever.
+    # It is disabled rather than left failing.
+    #
+    # There is no useful substitute here: docker already knows whether PID 1
+    # (cron) is alive, and whether a scheduled run actually succeeded is a
+    # property of the audit log, not of the process.
+    healthcheck:
+      disable: true
+
     logging:
       driver: json-file
       options:
