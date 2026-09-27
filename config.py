@@ -14,6 +14,44 @@ env_path = Path(__file__).resolve().parent / ".env"
 load_dotenv(dotenv_path=env_path)
 
 
+def _unescape_dollar_values(path: Path) -> None:
+    """
+    Collapse the "$$" escape to "$" for values this process loaded from the
+    .env FILE.
+
+    Why: Docker Compose treats "$NAME" in a value as a variable reference and
+    substitutes an empty string, so a password containing "$" arrives in the
+    container silently truncated. Compose's documented escape for a literal "$"
+    is "$$", so secrets stored for Compose are written escaped. python-dotenv
+    does no such unescaping, so the host has to undo it here.
+
+    Scoped deliberately to keys that came from the .env file:
+      - In Docker the values arrive via env_file already unescaped by Compose,
+        and .env is not in the image, so this is a no-op there.
+      - A plain single "$" (not doubled) is left exactly as written, so a value
+        that legitimately contains "$@" is untouched.
+    """
+    if not path.is_file():
+        return
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError:
+        return
+
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        if key not in os.environ or "$$" not in os.environ[key]:
+            continue
+        os.environ[key] = os.environ[key].replace("$$", "$")
+
+
+_unescape_dollar_values(env_path)
+
+
 class ServerConfig:
     def __init__(self, prefix: str):
         self.host = os.getenv(f"{prefix}_SERVER_HOST", "localhost")
