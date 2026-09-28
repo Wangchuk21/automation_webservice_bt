@@ -189,6 +189,7 @@ class AccountCreateRequest(BaseModel):
     postal_code: Optional[str] = Field(None, description="Customer postal code for nic.bt.bt (required by the registry form)")
     country: Optional[str] = Field(None, description="Customer country code for nic.bt.bt")
     renewal_date: Optional[str] = Field(None, description="Domain renewal date for nic.bt.bt, YYYY-MM-DD")
+    ext: Optional[str] = Field(None, description="Registry extension (.bt, .com.bt, ...). Defaults to derived from the domain.")
     dry_run: bool = Field(False, description="Simulate account creation without modifying remote server")
 
     # Defence in depth against shell injection. The provisioners shlex.quote()
@@ -370,6 +371,7 @@ async def create_account(payload: AccountCreateRequest):
                 postalcode=payload.postal_code,
                 country=payload.country or "BT",
                 reg_date=payload.renewal_date,
+                ext=payload.ext,
             )
 
     return {
@@ -811,6 +813,26 @@ async def suspend_account_now(
             "panel": panel_norm, "username": username, "domain": state.get("domain", "")}
 
 
+@app.get("/api/v1/nic/extensions", dependencies=[Depends(require_api_token)])
+async def nic_extensions():
+    """
+    The extensions nic.bt.bt accepts, read from the registry's own dropdown.
+
+    The dashboard builds its extension selector from this, so the operator can
+    only pick something the registry will take. Cached for a few minutes; an
+    empty list means the portal could not be read, and the caller shows the
+    field as unavailable rather than guessing.
+    """
+    opts = NICClient.list_extensions()
+    return {
+        "extensions": opts,
+        "available": bool(opts),
+        "message": "" if opts else
+                   "Could not read the extension list from nic.bt.bt. "
+                   "The extension will be derived from the domain name instead.",
+    }
+
+
 @app.get("/api/v1/nic/field-spec", dependencies=[Depends(require_api_token)])
 async def nic_field_spec():
     """
@@ -840,6 +862,7 @@ class DomainRegisterRequest(BaseModel):
     postal_code: Optional[str] = None
     country: Optional[str] = "BT"
     renewal_date: Optional[str] = None
+    ext: Optional[str] = Field(None, description="Registry extension (.bt, .com.bt, ...). Defaults to derived from the domain.")
 
     @field_validator("domain")
     @classmethod
@@ -880,5 +903,6 @@ async def register_nic_domain(payload: DomainRegisterRequest):
         postalcode=payload.postal_code or "-",
         country=payload.country or "BT",
         reg_date=payload.renewal_date,
+        ext=payload.ext,
     )
     return res

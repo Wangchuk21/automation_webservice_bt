@@ -203,6 +203,41 @@ def split_domain_ext(full_domain: str) -> Tuple[str, str]:
 class NICClient:
     """Client for managing domain registration and WHOIS on nic.bt.bt."""
 
+    # Extension lists change rarely and reading them means authenticating
+    # against the portal. Cached briefly so opening the dashboard does not log
+    # in on every page load, while a portal-side change still surfaces.
+    _ext_cache: Tuple[Optional[List[str]], float] = (None, 0.0)
+    _EXT_CACHE_TTL = 900  # seconds
+
+    @classmethod
+    def list_extensions(cls, force_refresh: bool = False) -> List[str]:
+        """
+        The extensions the registry's own dropdown offers.
+
+        This is the authority: nic.bt.bt decides what it accepts, so the
+        dashboard's dropdown is built from this rather than a hardcoded list.
+        Falls back to an empty list, which the caller renders as "unavailable",
+        rather than guessing.
+        """
+        cached, when = cls._ext_cache
+        if not force_refresh and cached and (time.time() - when) < cls._EXT_CACHE_TTL:
+            return list(cached)
+        try:
+            client = cls()
+            if not client.login()[0]:
+                return list(cached or [])
+            resp = _request_with_retry(client.session, "GET",
+                                       f"{client.base_url}/domain/create",
+                                       attempts=2, timeout=REGISTRY_TIMEOUT)
+
+            opts = available_extensions(resp.text)
+            if opts:
+                cls._ext_cache = (opts, time.time())
+                return list(opts)
+        except Exception as e:
+            logger.warning("Could not read the nic.bt.bt extension list: %s", e)
+        return list(cached or [])
+
     def __init__(
         self,
         base_url: Optional[str] = None,
@@ -287,16 +322,31 @@ class NICClient:
         address: str = "Thimphu, Bhutan",
         postalcode: str = "-",
         country: str = "BT",
-        reg_date: Optional[str] = None
+        reg_date: Optional[str] = None,
+        ext: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Creates or updates a domain entry on nic.bt.bt for WHOIS lookup.
+
+        `ext` is the registry extension (.bt, .com.bt, ...). It is taken from
+        the operator when given -- the dashboard offers the registry's own
+        dropdown, since the portal is the authority on what it accepts -- and
+        otherwise derived from the domain name. Either way it is validated
+        against the live dropdown before submitting.
         """
         ok, msg = self._ensure_logged_in()
         if not ok:
             return {"success": False, "message": f"NIC Login Failed: {msg}"}
 
-        base_domain, ext = split_domain_ext(domain)
+        base_domain, derived_ext = split_domain_ext(domain)
+        if ext:
+            ext = ext.strip()
+            # The operator chose from the registry's dropdown, so the domain may
+            # already include the extension. Drop it before re-adding.
+            if base_domain.lower().endswith(ext.lower()):
+                base_domain = base_domain[: -len(ext)]
+        else:
+            ext = derived_ext
         reg_date_str = reg_date or date.today().strftime("%Y-%m-%d")
 
         existing_id = self.find_domain_id(base_domain, ext)

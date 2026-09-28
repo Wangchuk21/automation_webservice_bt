@@ -235,12 +235,26 @@
                 <span class="form-hint">2-letter ISO code.</span>
               </div>
             </div>
-            <div class="form-group">
-              <label for="renewal_date" class="form-label">Domain Renewal Date</label>
-              <div class="input-wrapper">
-                <input type="date" id="renewal_date" name="renewal_date">
+            <div class="form-row">
+              <div class="form-group">
+                <label for="ext" class="form-label">Registry Extension <span class="required">*</span></label>
+                <div class="input-wrapper">
+                  <select id="ext" name="ext">
+                    <option value="">Loading from nic.bt.bt…</option>
+                  </select>
+                </div>
+                <span class="form-hint" id="ext_hint">
+                  Read from the extension dropdown on nic.bt.bt, so only extensions the
+                  registry accepts can be chosen.
+                </span>
               </div>
-              <span class="form-hint">Leave blank to use today's date. Registrations are normally renewed annually.</span>
+              <div class="form-group">
+                <label for="renewal_date" class="form-label">Domain Renewal Date</label>
+                <div class="input-wrapper">
+                  <input type="date" id="renewal_date" name="renewal_date">
+                </div>
+                <span class="form-hint">Leave blank to use today's date. Registrations are normally renewed annually.</span>
+              </div>
             </div>
 
             <!-- Exactly what nic.bt.bt requires, and where each value comes from.

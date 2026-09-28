@@ -420,6 +420,68 @@ function syncNicMirrors() {
   });
 }
 
+// The extensions nic.bt.bt itself offers, so the selector can never drift from
+// what the registry accepts. Loaded on first use rather than at page load,
+// because reading it means the server authenticating against the portal.
+let NIC_EXTENSIONS = null;
+let nicExtTouched = false;
+
+async function loadNicExtensions() {
+  const sel = document.getElementById("ext");
+  const hint = document.getElementById("ext_hint");
+  if (!sel || NIC_EXTENSIONS) return;
+  const unavailable = (msg) => {
+    sel.innerHTML = '<option value="">Derived from the domain name</option>';
+    sel.disabled = true;
+    if (hint) {
+      hint.textContent = msg ||
+        "The extension list could not be read from nic.bt.bt, so it will be derived from the domain name.";
+    }
+  };
+  try {
+    const res = await fetch("/api/v1/nic/extensions", { headers: apiHeaders() });
+    const data = res.ok ? await res.json() : {};
+    const opts = (data.extensions || []).filter(Boolean);
+    if (!opts.length) { unavailable(data.message); return; }
+    NIC_EXTENSIONS = opts;
+    sel.innerHTML = opts.map((e) => `<option value="${esc(e)}">${esc(e)}</option>`).join("");
+    sel.disabled = false;
+    syncNicExtFromDomain();
+    renderNicPayload();
+  } catch (e) {
+    unavailable();
+  }
+}
+
+// Split a domain exactly the way the server does, so the preview below cannot
+// disagree with what gets submitted: the registry's own options longest-first,
+// then a plain first-label split, and .bt as the fallback. The offered list is
+// used rather than a hardcoded one so this cannot drift from the portal.
+function splitDomainExt(domain, offered) {
+  const full = (domain || "").trim().toLowerCase().replace(/\.+$/, "");
+  const known = (offered || []).slice().sort((a, b) => b.length - a.length);
+  for (const e of known) {
+    if (full.length > e.length && full.endsWith(e)) return [full.slice(0, -e.length), e];
+  }
+  const i = full.indexOf(".");
+  if (i > 0) return [full.slice(0, i), full.slice(i)];
+  return [full, ".bt"];
+}
+
+// Point the selector at whatever the typed domain implies -- but once the
+// operator has chosen deliberately, leave their choice alone.
+function syncNicExtFromDomain() {
+  const sel = document.getElementById("ext");
+  if (!sel || sel.disabled || nicExtTouched) return;
+  const domainEl = document.getElementById("domain");
+  const full = ((domainEl && domainEl.value) || "").trim().toLowerCase();
+  if (!full) return;
+  const [, ext] = splitDomainExt(full, NIC_EXTENSIONS || []);
+  if (ext && Array.prototype.some.call(sel.options, (o) => o.value === ext)) {
+    sel.value = ext;
+  }
+}
+
 // The payload preview: shows the operator precisely what will be POSTed.
 function renderNicPayload() {
   const pre = document.getElementById("nic_spec_payload");
@@ -432,13 +494,16 @@ function renderNicPayload() {
     return;
   }
 
-  // Split the extension off the way the client does.
-  const known = [".com.bt", ".org.bt", ".net.bt", ".gov.bt", ".edu.bt", ".bt"];
-  let base = full, ext = "";
-  for (const e of known) {
-    if (full.endsWith(e)) { base = full.slice(0, -e.length); ext = e; break; }
+  // Split the extension off, honouring an explicit choice from the selector.
+  const extSel = document.getElementById("ext");
+  const chosen = (extSel && extSel.value || "").trim();
+  let [base, ext] = splitDomainExt(full, NIC_EXTENSIONS || []);
+  if (chosen) {
+    ext = chosen;
+    if (base.toLowerCase().endsWith(chosen.toLowerCase())) {
+      base = base.slice(0, base.length - chosen.length);
+    }
   }
-  if (!ext) { const i = full.indexOf("."); if (i > 0) { base = full.slice(0, i); ext = full.slice(i); } }
 
   const formValue = (field) => {
     const id = NIC_FORM_FIELD[field];
@@ -477,9 +542,15 @@ document.addEventListener("DOMContentLoaded", () => {
     .forEach((id) => {
       const el = document.getElementById(id);
       if (!el) return;
-      el.addEventListener("input", () => { syncNicMirrors(); renderNicPayload(); });
-      el.addEventListener("change", () => { syncNicMirrors(); renderNicPayload(); });
+      el.addEventListener("input", () => { syncNicMirrors(); syncNicExtFromDomain(); renderNicPayload(); });
+      el.addEventListener("change", () => { syncNicMirrors(); syncNicExtFromDomain(); renderNicPayload(); });
     });
+  // Choosing an extension by hand overrides what the domain implies, so the
+  // domain must not then pull the selector back.
+  const extSel = document.getElementById("ext");
+  if (extSel) {
+    extSel.addEventListener("change", () => { nicExtTouched = true; renderNicPayload(); });
+  }
 });
 
 // ========================================================
@@ -514,6 +585,7 @@ document.addEventListener("DOMContentLoaded", () => {
   if (nicToggle && nicFields) {
     const sync = () => {
       nicFields.hidden = !nicToggle.checked;
+      if (nicToggle.checked) loadNicExtensions();
     };
     nicToggle.addEventListener("change", sync);
     sync();
@@ -749,6 +821,7 @@ async function handleProvisionSubmit(e) {
   const postalCode = (document.getElementById("postal_code") || {}).value || "";
   const country = (document.getElementById("country") || {}).value || "";
   const renewalDate = (document.getElementById("renewal_date") || {}).value || "";
+  const nicExt = (document.getElementById("ext") || {}).value || "";
 
   if (!domain) {
     showToast("Please enter a domain name.", "error");
@@ -793,6 +866,7 @@ async function handleProvisionSubmit(e) {
         postal_code: postalCode || null,
         country: country || null,
         renewal_date: renewalDate || null,
+        ext: nicExt || null,
         dry_run: dryRun
       })
     });
