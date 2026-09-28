@@ -215,6 +215,12 @@
                 Reset to automatic
               </button>
             </div>
+
+            <!-- nic.bt.bt stores the name and the extension as two separate
+                 fields, so wank.com.bt appears as "wank" + ".com.bt" and reads
+                 as though part of the domain went missing. Show what the two
+                 recombine into, so the split is visible rather than inferred. -->
+            <div class="nic-reg-recombined" id="nic-reg-recombined" hidden></div>
             <div id="nic-reg-form" class="nic-reg-form">
               <p class="form-hint">Loading the registry's field list&hellip;</p>
             </div>

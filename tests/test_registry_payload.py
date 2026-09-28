@@ -209,3 +209,48 @@ class TestNicFieldsValidation(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestDomainMirrorsTheCustomerDomain(unittest.TestCase):
+    """
+    nic.bt.bt keeps the name and the extension in separate fields, so the form
+    shows "wank" and ".com.bt" where the operator typed "wank.com.bt". That
+    reads as a truncated domain, so the box mirrors the Customer Domain Name and
+    the form shows what the two recombine into.
+
+    It is a mirror rather than a plain input, but not a dead end: a registry
+    record that genuinely should differ from the hosting domain can still be
+    entered, deliberately.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        root = Path(__file__).resolve().parent.parent
+        cls.js = (root / "static" / "js" / "app.js").read_text()
+        cls.index = (root / "templates" / "index.html").read_text()
+
+    def test_the_domain_box_is_rendered_read_only(self):
+        self.assertTrue("readonly" in self.js.split('data-reg="domain"')[1][:120],
+                        "the domain box must not be freely editable")
+
+    def test_it_is_labelled_as_coming_from_the_customer_domain(self):
+        self.assertTrue("from Customer Domain Name" in self.js)
+
+    def test_the_two_fields_recombine_visibly(self):
+        self.assertTrue('id="nic-reg-recombined"' in self.index)
+        self.assertTrue("renderRecombined" in self.js)
+
+    def test_it_can_still_be_overridden_deliberately(self):
+        """Read-only with no escape would block a registry record that really
+        should differ from the hosting domain."""
+        self.assertTrue("onRegistryMirrorClick" in self.js)
+        self.assertTrue("el.readOnly = false" in self.js)
+
+    def test_reset_relocks_it(self):
+        self.assertTrue("mirror.readOnly = true" in self.js)
+
+    def test_the_mirror_value_is_still_submitted(self):
+        """Read-only inputs are excluded from a form POST, so the value has to
+        be collected from the DOM rather than relied on being sent natively."""
+        self.assertTrue("registryFieldValues" in self.js)
+        self.assertTrue("nic_fields: nicFields" in self.js)
