@@ -444,36 +444,7 @@ function syncRegistryFields() {
     const group = el.closest(".nic-reg-field");
     if (group) group.classList.toggle("is-touched", REG_TOUCHED.has(f.name));
   });
-  renderRecombined();
   renderRegistryMissing();
-}
-
-// nic.bt.bt holds the name and the extension separately, so the form shows
-// "wank" and ".com.bt" where the operator typed "wank.com.bt". Without this
-// line that reads as a truncated domain rather than a split one.
-function renderRecombined() {
-  const box = document.getElementById("nic-reg-recombined");
-  if (!box) return;
-  const base = regInput("domain");
-  const ext = regInput("ext");
-  const name = (base && base.value || "").trim();
-  const extension = (ext && ext.value || "").trim();
-  if (!name) { box.hidden = true; return; }
-
-  box.hidden = false;
-  const suffix = extension ? ` + <code>${esc(extension)}</code>` : "";
-  const full = name + extension;
-  // A domain that does not end in the chosen extension would register under a
-  // name the operator did not type. That is allowed -- they may be registering
-  // wank.bt under .com.bt deliberately -- so it is shown, not blocked.
-  const typed = currentDomain().toLowerCase();
-  const differs = typed && typed !== full.toLowerCase();
-  box.innerHTML = `<span class="nic-reg-recombined-label">Registers as</span>
-      <code>${esc(name)}</code>${suffix}
-      <span class="nic-reg-arrow">&rarr;</span>
-      <strong>${esc(full)}</strong>` +
-    (differs ? `<span class="nic-reg-recombined-warn">not the domain you typed
-      (<code>${esc(typed)}</code>) &mdash; the extension you chose is used instead</span>` : "");
 }
 
 // The resolved values, as the payload will be submitted. Blank entries are
@@ -549,23 +520,6 @@ async function loadRegistryForm() {
   box.innerHTML = groups;
   box.addEventListener("input", onRegistryEdit);
   box.addEventListener("change", onRegistryEdit);
-  box.addEventListener("click", onRegistryMirrorClick);
-  syncRegistryFields();
-}
-
-// The domain box mirrors the Customer Domain Name and is not editable by
-// accident. But a mirror with no way to override it is a dead end when the
-// registry record genuinely should differ, so clicking it unlocks it and marks
-// it as an override. Deliberate, and reversible by Reset.
-function onRegistryMirrorClick(e) {
-  const el = e.target;
-  if (!el || !el.classList || !el.classList.contains("nic-reg-mirror")) return;
-  el.readOnly = false;
-  el.classList.remove("nic-reg-mirror");
-  el.title = "";
-  REG_TOUCHED.add("domain");
-  el.focus();
-  el.select();
   syncRegistryFields();
 }
 
@@ -573,14 +527,7 @@ function regRow(f) {
   const hint = REG_SOURCE_LABEL[f.source] || f.source;
   const req = f.required ? ' <span class="required">*</span>' : "";
   let control;
-  if (f.name === "domain") {
-    // Read-only: nic.bt.bt wants the name without its extension, and that name
-    // is the Customer Domain Name. There is no separate value to type, and an
-    // editable box here is only a way to end up registering something other
-    // than the domain the hosting account was just created for.
-    control = `<input type="text" data-reg="domain" name="domain" readonly
-        class="nic-reg-mirror" title="Taken from the Customer Domain Name above">`;
-  } else if (f.name === "ext") {
+  if (f.name === "ext") {
     const opts = (REG_EXTENSIONS || []).map((e) => `<option value="${esc(e)}">${esc(e)}</option>`);
     control = `<select data-reg="ext" name="ext">
         ${opts.length ? opts.join("") : '<option value="">Unavailable</option>'}
@@ -596,8 +543,7 @@ function regRow(f) {
       <label class="form-label" for="reg-${esc(f.name)}">${esc(f.label)}${req}</label>
       <div class="input-wrapper">${control}</div>
       <span class="form-hint nic-reg-source" data-source="${esc(f.source)}">
-        ${f.name === "domain" ? "from Customer Domain Name"
-          : (f.source === "derived" ? `copied from ${esc(f.derived_from)}` : esc(hint))}
+        ${f.source === "derived" ? `copied from ${esc(f.derived_from)}` : esc(hint)}
       </span>
     </div>`;
 }
@@ -640,15 +586,6 @@ document.addEventListener("DOMContentLoaded", () => {
   if (refill) {
     refill.addEventListener("click", () => {
       REG_TOUCHED.clear();
-      const box = document.getElementById("nic-reg-form");
-      if (box) {
-        // Re-lock the domain mirror, which clicking it had unlocked.
-        const mirror = box.querySelector('[data-reg="domain"]');
-        if (mirror) {
-          mirror.readOnly = true;
-          mirror.classList.add("nic-reg-mirror");
-        }
-      }
       syncRegistryFields();
     });
   }
