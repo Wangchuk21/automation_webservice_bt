@@ -174,9 +174,9 @@ class TestDashboardAgreesWithTheServer(unittest.TestCase):
         self.assertIn('replace(', body)
 
     def test_a_manual_choice_is_not_overridden_by_the_domain(self):
-        """syncNicExtFromDomain must respect the operator's deliberate pick."""
-        self.assertIn("nicExtTouched", self.js)
-        self.assertIn("if (!sel || sel.disabled || nicExtTouched) return;", self.js)
+        """The generated fields must respect a deliberate pick too."""
+        self.assertTrue("REG_TOUCHED" in self.js)
+        self.assertTrue("if (REG_TOUCHED.has(f.name)) return;" in self.js)
 
 
 class TestExtensionsEndpoint(unittest.TestCase):
@@ -228,13 +228,25 @@ class TestRegistryFieldsAreNotDuplicated(unittest.TestCase):
         cls.ref = (root / "templates" / "registry_fields.html").read_text()
         cls.js = (root / "static" / "js" / "app.js").read_text()
 
-    def test_the_form_no_longer_renders_the_field_list(self):
-        for gone in ("nic_spec_fields", "nic_spec_payload", "id=\"nic_spec\""):
-            self.assertNotIn(gone, self.index,
-                             f"{gone} puts the field list back inside the form")
+    def test_the_old_read_only_mirror_is_gone(self):
+        """It duplicated the form's own fields rather than adding anything."""
+        for gone in ("nic_spec_fields", "nic_spec_payload", 'id="nic_spec"'):
+            self.assertNotIn(gone, self.index)
 
-    def test_the_form_links_to_the_reference_page(self):
-        self.assertIn('href="/registry-fields"', self.index)
+    def test_the_form_renders_every_field_from_the_spec(self):
+        """Not eight hand-written inputs, and not a hardcoded 23 either: the
+        form is generated from the same list the client submits, so a field the
+        registry gains appears without anyone editing the template."""
+        self.assertIn('id="nic-reg-form"', self.index)
+        self.assertIn("/api/v1/nic/field-spec", self.js)
+        self.assertIn("/api/v1/nic/extensions", self.js)
+        for name in ("customername", "tech_fax", "billing_email", "reg_renewal"):
+            self.assertNotIn(f'name="{name}"', self.index,
+                             f"{name} is written into the template by hand")
+
+    def test_the_form_submits_the_whole_field_set(self):
+        self.assertIn("registryFieldValues()", self.js)
+        self.assertIn("nic_fields: nicFields", self.js)
 
     def test_the_reference_page_does_not_re_capture_the_fields(self):
         """It must not offer inputs for the customer's details, or the
@@ -251,15 +263,23 @@ class TestRegistryFieldsAreNotDuplicated(unittest.TestCase):
 
     def test_dead_javascript_is_gone(self):
         """The removed panel's renderers had no elements left to bind to."""
-        for gone in ("renderNicPayload", "syncNicMirrors", "loadNicSpec", "NIC_SPEC"):
-            self.assertNotIn(gone, self.js, f"{gone} is dead code now")
+        for gone in ("renderNicPayload", "syncNicMirrors", "loadNicSpec",
+                     "NIC_SPEC", "syncNicExtFromDomain", "loadNicExtensions"):
+            self.assertFalse(gone in self.js, f"{gone} is dead code now")
 
-    def test_the_extension_selector_still_works(self):
-        """Removing the mirror must not take the selector with it."""
-        for kept in ("loadNicExtensions", "splitDomainExt", "syncNicExtFromDomain",
-                     "id=\"ext\"", "ext: nicExt || null"):
-            self.assertTrue(kept in self.js or kept in self.index,
-                            f"{kept} disappeared")
+    def test_the_extension_still_comes_from_the_registry(self):
+        """The selector is now one of the generated fields rather than a
+        hand-written one, but it must still be a select fed by the portal."""
+        self.assertIn('data-reg="ext"', self.js)
+        self.assertIn("<select", self.js)
+        self.assertIn("REG_EXTENSIONS", self.js)
+
+    def test_edited_fields_are_not_overwritten(self):
+        """A field the operator changed by hand must survive a later domain
+        edit, or the override silently reverts."""
+        self.assertTrue("REG_TOUCHED" in self.js)
+        self.assertTrue("if (REG_TOUCHED.has(f.name)) return;" in self.js)
+        self.assertTrue("REG_TOUCHED.clear()" in self.js)
 
 
 class TestRegistryFieldsPageIsServed(unittest.TestCase):

@@ -25,7 +25,9 @@ from provisioners.base import (
     ValidationError,
 )
 from notifier import send_customer_welcome_email, test_smtp_connection
-from nic_client import NICClient, registry_field_spec, split_domain_ext
+from nic_client import (
+    NICClient, REGISTRY_FIELDS, registry_field_spec, split_domain_ext,
+)
 from bscs_client import BSCSClient, BSCSError
 from suspension import (
     SKIP_ALREADY_BILLING, SKIP_NO_MATCH, SKIP_OTHER_REASON, SUSPEND, latest_report,
@@ -190,6 +192,15 @@ class AccountCreateRequest(BaseModel):
     country: Optional[str] = Field(None, description="Customer country code for nic.bt.bt")
     renewal_date: Optional[str] = Field(None, description="Domain renewal date for nic.bt.bt, YYYY-MM-DD")
     ext: Optional[str] = Field(None, description="Registry extension (.bt, .com.bt, ...). Defaults to derived from the domain.")
+    nic_fields: Dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "The full set of values nic.bt.bt requires, keyed by the registry's "
+            "own field names (customername, tech_fax, billing_email, ...). "
+            "Blank or omitted entries fall back to the derivation the client "
+            "applies. Unknown keys are rejected."
+        ),
+    )
     dry_run: bool = Field(False, description="Simulate account creation without modifying remote server")
 
     # Defence in depth against shell injection. The provisioners shlex.quote()
@@ -229,6 +240,26 @@ class AccountCreateRequest(BaseModel):
     @classmethod
     def _check_renewal_date(cls, v: Optional[str]) -> Optional[str]:
         return validate_renewal_date(v) if v else v
+
+    @field_validator("nic_fields")
+    @classmethod
+    def _check_nic_fields(cls, v: Dict[str, str]) -> Dict[str, str]:
+        """
+        Reject registry field names the registry does not have.
+
+        The client drops unknown keys rather than forwarding them, which is
+        right for safety but wrong for feedback: a mistyped name would simply
+        vanish and the operator would believe a value had been sent. Failing
+        here names the mistake instead.
+        """
+        known = {f["name"] for f in REGISTRY_FIELDS}
+        unknown = sorted(set(v or {}) - known)
+        if unknown:
+            raise ValueError(
+                f"Unknown nic.bt.bt field(s): {', '.join(unknown)}. "
+                f"Valid names: {', '.join(sorted(known))}"
+            )
+        return {k: str(val).strip() for k, val in (v or {}).items()}
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -390,6 +421,7 @@ async def create_account(payload: AccountCreateRequest):
                 country=payload.country or "BT",
                 reg_date=payload.renewal_date,
                 ext=payload.ext,
+                fields=payload.nic_fields,
             )
 
     return {
@@ -881,6 +913,15 @@ class DomainRegisterRequest(BaseModel):
     country: Optional[str] = "BT"
     renewal_date: Optional[str] = None
     ext: Optional[str] = Field(None, description="Registry extension (.bt, .com.bt, ...). Defaults to derived from the domain.")
+    nic_fields: Dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "The full set of values nic.bt.bt requires, keyed by the registry's "
+            "own field names (customername, tech_fax, billing_email, ...). "
+            "Blank or omitted entries fall back to the derivation the client "
+            "applies. Unknown keys are rejected."
+        ),
+    )
 
     @field_validator("domain")
     @classmethod
@@ -907,6 +948,26 @@ class DomainRegisterRequest(BaseModel):
     def _check_renewal_date(cls, v: Optional[str]) -> Optional[str]:
         return validate_renewal_date(v) if v else v
 
+    @field_validator("nic_fields")
+    @classmethod
+    def _check_nic_fields(cls, v: Dict[str, str]) -> Dict[str, str]:
+        """
+        Reject registry field names the registry does not have.
+
+        The client drops unknown keys rather than forwarding them, which is
+        right for safety but wrong for feedback: a mistyped name would simply
+        vanish and the operator would believe a value had been sent. Failing
+        here names the mistake instead.
+        """
+        known = {f["name"] for f in REGISTRY_FIELDS}
+        unknown = sorted(set(v or {}) - known)
+        if unknown:
+            raise ValueError(
+                f"Unknown nic.bt.bt field(s): {', '.join(unknown)}. "
+                f"Valid names: {', '.join(sorted(known))}"
+            )
+        return {k: str(val).strip() for k, val in (v or {}).items()}
+
 
 @app.post("/api/v1/nic/register", dependencies=[Depends(require_api_token)])
 async def register_nic_domain(payload: DomainRegisterRequest):
@@ -922,5 +983,6 @@ async def register_nic_domain(payload: DomainRegisterRequest):
         country=payload.country or "BT",
         reg_date=payload.renewal_date,
         ext=payload.ext,
+        fields=payload.nic_fields,
     )
     return res

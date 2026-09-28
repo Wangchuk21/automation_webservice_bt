@@ -342,42 +342,35 @@ document.addEventListener("DOMContentLoaded", () => {
   loadSuspensionReport();
 });
 
-// The extensions nic.bt.bt itself offers, so the selector can never drift from
-// what the registry accepts. Loaded on first use rather than at page load,
-// because reading it means the server authenticating against the portal.
-let NIC_EXTENSIONS = null;
-let nicExtTouched = false;
+// ========================================================
+// nic.bt.bt REGISTRY FORM
+// All 23 fields the registry requires, rendered from the same field spec the
+// client builds its payload from, so the form and the submission cannot
+// disagree. Values are prefilled the way the client has always derived them,
+// and any of them can be overridden.
+// ========================================================
 
-async function loadNicExtensions() {
-  const sel = document.getElementById("ext");
-  const hint = document.getElementById("ext_hint");
-  if (!sel || NIC_EXTENSIONS) return;
-  const unavailable = (msg) => {
-    sel.innerHTML = '<option value="">Derived from the domain name</option>';
-    sel.disabled = true;
-    if (hint) {
-      hint.textContent = msg ||
-        "The extension list could not be read from nic.bt.bt, so it will be derived from the domain name.";
-    }
-  };
-  try {
-    const res = await fetch("/api/v1/nic/extensions", { headers: apiHeaders() });
-    const data = res.ok ? await res.json() : {};
-    const opts = (data.extensions || []).filter(Boolean);
-    if (!opts.length) { unavailable(data.message); return; }
-    NIC_EXTENSIONS = opts;
-    sel.innerHTML = opts.map((e) => `<option value="${esc(e)}">${esc(e)}</option>`).join("");
-    sel.disabled = false;
-    syncNicExtFromDomain();
-  } catch (e) {
-    unavailable();
-  }
-}
+let REG_SPEC = null;          // the 23-field spec from the API
+let REG_EXTENSIONS = null;    // the registry's own extension dropdown
+const REG_TOUCHED = new Set();   // fields the operator has edited by hand
 
-// Split a domain exactly the way the server does, so the preview below cannot
-// disagree with what gets submitted: the registry's own options longest-first,
-// then a plain first-label split, and .bt as the fallback. The offered list is
-// used rather than a hardcoded one so this cannot drift from the portal.
+const REG_SOURCE_LABEL = {
+  customer: "from customer",
+  derived: "copied from another field",
+  default: "Bhutan Telecom default",
+  computed: "from the domain",
+};
+
+const REG_PLACEHOLDER = {
+  address: "Thimphu, Bhutan",
+  postalcode: "-",
+  phone: "+975",
+  country: "BT",
+};
+
+// Split a domain exactly the way the server does: the registry's own options
+// longest-first, then a plain first-label split, and .bt as the fallback. Using
+// the offered list rather than a hardcoded one keeps this from drifting.
 function splitDomainExt(domain, offered) {
   const full = (domain || "").trim().toLowerCase().replace(/\.+$/, "");
   const known = (offered || []).slice().sort((a, b) => b.length - a.length);
@@ -389,32 +382,213 @@ function splitDomainExt(domain, offered) {
   return [full, ".bt"];
 }
 
-// Point the selector at whatever the typed domain implies -- but once the
-// operator has chosen deliberately, leave their choice alone.
-function syncNicExtFromDomain() {
-  const sel = document.getElementById("ext");
-  if (!sel || sel.disabled || nicExtTouched) return;
-  const domainEl = document.getElementById("domain");
-  const full = ((domainEl && domainEl.value) || "").trim().toLowerCase();
-  if (!full) return;
-  const [, ext] = splitDomainExt(full, NIC_EXTENSIONS || []);
-  if (ext && Array.prototype.some.call(sel.options, (o) => o.value === ext)) {
-    sel.value = ext;
+function regInput(name) {
+  return document.querySelector(`[data-reg="${name}"]`);
+}
+
+// The value a field takes when the operator has not overridden it. This mirrors
+// build_registry_payload in nic_client.py: a derived field follows its parent,
+// a Bhutan Telecom default is used where the registry needs one, and the two
+// computed fields come from the domain.
+function regFallback(name, field) {
+  switch (name) {
+    case "domain": {
+      const [base] = splitDomainExt(currentDomain(), REG_EXTENSIONS || []);
+      return base;
+    }
+    case "ext": {
+      const [, ext] = splitDomainExt(currentDomain(), REG_EXTENSIONS || []);
+      return ext;
+    }
+    case "reg_renewal": {
+      const box = document.getElementById("renewal_date");
+      return (box && box.value) || "";
+    }
+    default: break;
   }
+  if (field.source === "derived" && field.derived_from) {
+    return regFallback(field.derived_from, regField(field.derived_from) || {});
+  }
+  if (field.source === "default") return field.default || "";
+  return REG_PLACEHOLDER[name] || "";
+}
+
+function regField(name) {
+  return (REG_SPEC && REG_SPEC.fields || []).find((f) => f.name === name);
+}
+
+function currentDomain() {
+  const el = document.getElementById("domain");
+  return ((el && el.value) || "").trim();
+}
+
+// Repaint every field the operator has not touched. Called whenever the domain
+// or a parent field changes, so the copied contacts stay in step.
+function syncRegistryFields() {
+  if (!REG_SPEC) return;
+  REG_SPEC.fields.forEach((f) => {
+    if (REG_TOUCHED.has(f.name)) return;
+    const el = regInput(f.name);
+    if (!el) return;
+    const value = regFallback(f.name, f);
+    if (el.tagName === "SELECT") {
+      el.value = value;
+      if (value && el.value !== value) {
+        // The extension list could not be read, so this value is not on offer.
+        el.insertBefore(new Option(`${value} (not on offer)`, value), el.firstChild);
+        el.value = value;
+      }
+    } else {
+      el.value = value;
+    }
+    const group = el.closest(".nic-reg-field");
+    if (group) group.classList.toggle("is-touched", REG_TOUCHED.has(f.name));
+  });
+  renderRegistryMissing();
+}
+
+// The resolved values, as the payload will be submitted. Blank entries are
+// omitted so the server applies its own fallback rather than being handed "".
+function registryFieldValues() {
+  const out = {};
+  if (!REG_SPEC) return out;
+  REG_SPEC.fields.forEach((f) => {
+    const el = regInput(f.name);
+    if (!el) return;
+    const v = (el.value || "").trim();
+    if (v) out[f.name] = v;
+  });
+  return out;
+}
+
+// Required fields left empty. nic.bt.bt rejects the whole submission if any of
+// them is blank, so this is checked before the hosting account is created rather
+// than after.
+function missingRegistryFields() {
+  if (!REG_SPEC) return [];
+  return REG_SPEC.fields
+    .filter((f) => f.required)
+    .filter((f) => {
+      const el = regInput(f.name);
+      return !el || !(el.value || "").trim();
+    })
+    .map((f) => f.name);
+}
+
+function renderRegistryMissing() {
+  const box = document.getElementById("nic-reg-missing");
+  if (!box || !REG_SPEC) return;
+  const missing = missingRegistryFields();
+  box.hidden = missing.length === 0;
+  box.textContent = missing.length
+    ? `Still empty — nic.bt.bt will reject the submission: ${missing.join(", ")}`
+    : "";
+}
+
+async function loadRegistryForm() {
+  const box = document.getElementById("nic-reg-form");
+  if (!box) return;
+
+  const specRes = await fetch("/api/v1/nic/field-spec", { headers: apiHeaders() });
+  if (!specRes.ok) {
+    box.innerHTML = `<p class="form-hint">Could not load the registry's field list (HTTP ${specRes.status}).</p>`;
+    return;
+  }
+  REG_SPEC = await specRes.json();
+
+  // The extension list is the registry's own dropdown, not a copy of it.
+  try {
+    const extRes = await fetch("/api/v1/nic/extensions", { headers: apiHeaders() });
+    const data = extRes.ok ? await extRes.json() : {};
+    REG_EXTENSIONS = (data.extensions || []).filter(Boolean);
+  } catch (e) {
+    REG_EXTENSIONS = [];
+  }
+
+  const groups = (REG_SPEC.groups || []).map(([key, label]) => {
+    const fields = REG_SPEC.fields.filter((f) => f.group === key);
+    if (!fields.length) return "";
+    const rows = fields.map((f) => regRow(f)).join("");
+    return `<div class="nic-reg-group">
+              <h4 class="nic-reg-group-title">${esc(label)}
+                <span class="nic-reg-group-count">${fields.length}</span>
+              </h4>
+              <div class="nic-reg-grid">${rows}</div>
+            </div>`;
+  }).join("");
+
+  box.innerHTML = groups;
+  box.addEventListener("input", onRegistryEdit);
+  box.addEventListener("change", onRegistryEdit);
+  syncRegistryFields();
+}
+
+function regRow(f) {
+  const hint = REG_SOURCE_LABEL[f.source] || f.source;
+  const req = f.required ? ' <span class="required">*</span>' : "";
+  let control;
+  if (f.name === "ext") {
+    const opts = (REG_EXTENSIONS || []).map((e) => `<option value="${esc(e)}">${esc(e)}</option>`);
+    control = `<select data-reg="ext" name="ext">
+        ${opts.length ? opts.join("") : '<option value="">Unavailable</option>'}
+      </select>`;
+  } else if (f.name === "reg_renewal") {
+    control = `<input type="date" data-reg="reg_renewal" name="reg_renewal" id="renewal_date">`;
+  } else {
+    const type = f.name === "email" ? "email" : "text";
+    control = `<input type="${type}" data-reg="${esc(f.name)}" name="${esc(f.name)}"
+        placeholder="${esc(f.default || "e.g. " + (f.label || "").toLowerCase())}">`;
+  }
+  return `<div class="form-group nic-reg-field">
+      <label class="form-label" for="reg-${esc(f.name)}">${esc(f.label)}${req}</label>
+      <div class="input-wrapper">${control}</div>
+      <span class="form-hint nic-reg-source" data-source="${esc(f.source)}">
+        ${f.source === "derived" ? `copied from ${esc(f.derived_from)}` : esc(hint)}
+      </span>
+    </div>`;
+}
+
+// An edit to one field can change fields copied from it, so re-derive the rest.
+function onRegistryEdit(e) {
+  const el = e.target;
+  const name = el && el.getAttribute && el.getAttribute("data-reg");
+  if (name) REG_TOUCHED.add(name);
+  syncRegistryFields();
 }
 
 document.addEventListener("DOMContentLoaded", () => {
-  // Only the extension selector needs wiring: the rest of the registry fields
-  // are ordinary form inputs submitted with the rest of the form.
+  // Load the registry's field list only when the operator asks for a registry
+  // push, so a normal hosting provision does not pay for it.
+  const nicToggle = document.getElementById("register_nic");
+  const nicFields = document.getElementById("nic-fields");
+  if (nicToggle && nicFields) {
+    let loaded = false;
+    const sync = () => {
+      nicFields.hidden = !nicToggle.checked;
+      if (nicToggle.checked && !loaded) {
+        loaded = true;
+        loadRegistryForm();
+      }
+      if (nicToggle.checked) syncRegistryFields();
+    };
+    nicToggle.addEventListener("change", sync);
+    sync();
+  }
+
+  // The domain drives the two computed fields and anything copied from them.
   const domain = document.getElementById("domain");
   if (domain) {
-    domain.addEventListener("input", syncNicExtFromDomain);
-    domain.addEventListener("change", syncNicExtFromDomain);
+    domain.addEventListener("input", syncRegistryFields);
+    domain.addEventListener("change", syncRegistryFields);
   }
-  // Choosing an extension by hand overrides what the domain implies, so the
-  // domain must not then pull the selector back.
-  const extSel = document.getElementById("ext");
-  if (extSel) extSel.addEventListener("change", () => { nicExtTouched = true; });
+
+  const refill = document.getElementById("nic-reg-refill");
+  if (refill) {
+    refill.addEventListener("click", () => {
+      REG_TOUCHED.clear();
+      syncRegistryFields();
+    });
+  }
 });
 
 // ========================================================
@@ -443,17 +617,9 @@ document.addEventListener("DOMContentLoaded", () => {
   }
   updateAuthBanner();
 
-  // Show the nic.bt.bt contact fields only when the registry push is requested.
-  const nicToggle = document.getElementById("register_nic");
-  const nicFields = document.getElementById("nic-fields");
-  if (nicToggle && nicFields) {
-    const sync = () => {
-      nicFields.hidden = !nicToggle.checked;
-      if (nicToggle.checked) loadNicExtensions();
-    };
-    nicToggle.addEventListener("change", sync);
-    sync();
-  }
+  // The nic.bt.bt toggle is wired once, in the registry form section above,
+  // which also loads the field list. Wiring it again here would hide the block
+  // independently of the load and call a function that no longer exists.
 });
 
 // The token to send as X-API-Token, or null when the API is unauthenticated.
@@ -679,26 +845,27 @@ async function handleProvisionSubmit(e) {
 
   // nic.bt.bt registry push
   const registerNic = document.getElementById("register_nic") ? document.getElementById("register_nic").checked : false;
-  const customerName = (document.getElementById("customer_name") || {}).value || "";
-  const phone = (document.getElementById("phone") || {}).value || "";
-  const address = (document.getElementById("address") || {}).value || "";
-  const postalCode = (document.getElementById("postal_code") || {}).value || "";
-  const country = (document.getElementById("country") || {}).value || "";
-  const renewalDate = (document.getElementById("renewal_date") || {}).value || "";
-  const nicExt = (document.getElementById("ext") || {}).value || "";
+  // All 23 registry fields, as the operator left them. Blank ones are omitted so
+  // the server applies the same fallback it always has.
+  const nicFields = registerNic ? registryFieldValues() : {};
+  const nicExt = nicFields.ext || null;
 
   if (!domain) {
     showToast("Please enter a domain name.", "error");
     return;
   }
 
-  // nic.bt.bt marks the postal code as required on the domain form, so catch it
-  // here for instant feedback rather than after a round-trip to the registry.
-  if (registerNic && !postalCode.trim()) {
-    showToast("Postal code is required to register the domain on nic.bt.bt.", "error");
-    const el = document.getElementById("postal_code");
-    if (el) { el.focus(); el.style.borderColor = "var(--accent-rose)"; }
-    return;
+  // Check the registry's required fields here rather than after a round-trip:
+  // the hosting account is created first, so a rejection from the registry would
+  // otherwise leave a half-finished provisioning behind.
+  if (registerNic) {
+    const missing = missingRegistryFields();
+    if (missing.length) {
+      showToast(`nic.bt.bt still needs: ${missing.join(", ")}`, "error");
+      const el = regInput(missing[0]);
+      if (el) { el.focus(); el.style.borderColor = "var(--accent-rose)"; }
+      return;
+    }
   }
 
   // Switch UI to loading
@@ -724,13 +891,8 @@ async function handleProvisionSubmit(e) {
         package: packagePlan || null,
         send_email: sendEmail,
         register_nic: registerNic,
-        customer_name: customerName || null,
-        phone: phone || null,
-        address: address || null,
-        postal_code: postalCode || null,
-        country: country || null,
-        renewal_date: renewalDate || null,
-        ext: nicExt || null,
+        ext: nicExt,
+        nic_fields: nicFields,
         dry_run: dryRun
       })
     });

@@ -58,6 +58,10 @@ def _request_with_retry(session, method: str, url: str, attempts: int = REGISTRY
 #   default   -- Bhutan Telecom's own details, from config
 #   computed  -- built from the domain name
 #
+# "group" says which section of the registry's form the field belongs to, so the
+# dashboard can present the four sections the way the portal does rather than as
+# one flat list of 23 inputs.
+#
 # This is the single source of truth. The client builds its payload from it and
 # the dashboard renders its form from it, so the two cannot drift apart -- which
 # is how ten hardcoded values went unnoticed, invisible from both sides.
@@ -128,6 +132,9 @@ def registry_field_spec() -> Dict[str, Any]:
         "fields": [dict(f, default=defaults.get(f["name"], "")) for f in REGISTRY_FIELDS],
         "required_count": sum(1 for f in REGISTRY_FIELDS if f.get("required")),
         "source_counts": counts,
+        # The portal presents the form in four sections. Presenting them the
+        # same way keeps 23 inputs legible instead of one long wall.
+        "groups": [list(g) for g in REGISTRY_GROUPS],
     }
 
 
@@ -198,6 +205,111 @@ def split_domain_ext(full_domain: str) -> Tuple[str, str]:
     if len(parts) > 1:
         return parts[0], "." + parts[1]
     return clean, ".bt"
+
+
+# Values used when the operator leaves a field blank. Chosen to match what the
+# client has always sent, so a form that is filled in as before produces a
+# byte-identical payload to the previous hardcoded one.
+NIC_FALLBACKS = {
+    "address": "Thimphu, Bhutan",
+    "postalcode": settings.NIC_PLACEHOLDER,
+    "phone": "+975",
+    "country": settings.NIC_DEFAULT_COUNTRY,
+    "registrar": settings.NIC_REGISTRAR,
+    "tech_fax": settings.NIC_PLACEHOLDER,
+    "billing_fax": settings.NIC_PLACEHOLDER,
+    "billing_country": settings.NIC_DEFAULT_COUNTRY,
+}
+
+
+def build_registry_payload(
+    provided: Dict[str, Any],
+    base_domain: str,
+    ext: str,
+    reg_date: str,
+) -> Dict[str, str]:
+    """
+    Build the form body nic.bt.bt expects, from whatever the operator entered.
+
+    Every one of the 23 fields the registry requires is resolved here, in one
+    place, driven by REGISTRY_FIELDS -- the same list the dashboard renders its
+    form from. Before this existed the body was written out field by field and
+    duplicated across the create and update paths, so adding a field meant
+    editing two literals and neither could be checked against the form.
+
+    Resolution order, per field:
+      1. the operator's own value, if they gave one
+      2. the field's derived source (tech_* from the customer, billing_* from
+         the customer), which is the registry's own convention
+      3. a Bhutan Telecom fallback, where the registry requires a value the
+         customer has no part in -- the registrar, and the two fax numbers
+
+    Unknown keys are dropped rather than forwarded: the registry is a
+    form-encoded endpoint, and passing a field it does not recognise risks it
+    being stored somewhere unintended.
+    """
+    known = {f["name"]: f for f in REGISTRY_FIELDS}
+    clean: Dict[str, str] = {}
+    for name, value in (provided or {}).items():
+        if name not in known or value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            clean[name] = text
+
+    def resolved(name: str) -> str:
+        if clean.get(name):
+            return clean[name]
+        field = known.get(name) or {}
+        source = field.get("source")
+        if source == "derived":
+            parent = field.get("derived_from") or ""
+            return resolved(parent) if parent in known else ""
+        if name == "domain":
+            return base_domain
+        if name == "ext":
+            return ext
+        if name == "reg_renewal":
+            return reg_date
+        return NIC_FALLBACKS.get(name, clean.get(name, ""))
+
+    payload: Dict[str, str] = {}
+    for name in known:
+        payload[name] = resolved(name)
+    return payload
+
+
+def missing_registry_fields(payload: Dict[str, str]) -> List[str]:
+    """The required fields the registry would reject the submission for."""
+    return [f["name"] for f in REGISTRY_FIELDS
+            if f.get("required") and not (payload.get(f["name"]) or "").strip()]
+
+
+REGISTRY_GROUPS = (
+    ("domain", "Domain"),
+    ("contact", "Registrant / contact"),
+    ("technical", "Technical contact"),
+    ("billing", "Billing contact"),
+)
+
+
+def _group_of(name: str) -> str:
+    """Which section of the registry's form a field belongs to."""
+    if name in ("domain", "ext", "registrar", "reg_renewal"):
+        return "domain"
+    if name.startswith("tech_"):
+        return "technical"
+    if name.startswith("billing_"):
+        return "billing"
+    return "contact"
+
+
+# Assign each field its section. Done programmatically rather than by hand in
+# the literals: a newly added field gets a sensible section automatically
+# instead of silently landing in the wrong one.
+REGISTRY_FIELDS = tuple(
+    dict(f, group=_group_of(f["name"])) for f in REGISTRY_FIELDS
+)
 
 
 class NICClient:
@@ -323,7 +435,8 @@ class NICClient:
         postalcode: str = "-",
         country: str = "BT",
         reg_date: Optional[str] = None,
-        ext: Optional[str] = None
+        ext: Optional[str] = None,
+        fields: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """
         Creates or updates a domain entry on nic.bt.bt for WHOIS lookup.
@@ -333,6 +446,13 @@ class NICClient:
         dropdown, since the portal is the authority on what it accepts -- and
         otherwise derived from the domain name. Either way it is validated
         against the live dropdown before submitting.
+
+        `fields` is the operator's full set of registry values, keyed by the
+        names the registry uses. It is the form rendered from REGISTRY_FIELDS,
+        so the operator can set any of the 23 fields rather than only the
+        handful that used to have named parameters. Blank entries fall back to
+        the derivation the client has always applied, so filling the form in as
+        before produces the same submission.
         """
         ok, msg = self._ensure_logged_in()
         if not ok:
@@ -349,6 +469,25 @@ class NICClient:
             ext = derived_ext
         reg_date_str = reg_date or date.today().strftime("%Y-%m-%d")
 
+        # Seed the builder with the named parameters, then let the full field
+        # set from the form override them. Kept in this order so an explicit
+        # form value always wins over a parameter default.
+        provided: Dict[str, Any] = {
+            "customername": customer_name, "address": address,
+            "postalcode": postalcode, "phone": phone, "email": email,
+            "country": country, "reg_renewal": reg_date_str,
+        }
+        provided.update(fields or {})
+        data = build_registry_payload(provided, base_domain, ext, reg_date_str)
+
+        missing = missing_registry_fields(data)
+        if missing:
+            # Caught here rather than at the portal: these are the registry's
+            # required fields, and a rejection there gives no field names.
+            return {"success": False,
+                    "message": "nic.bt.bt requires these fields, which are empty: "
+                               + ", ".join(missing)}
+
         existing_id = self.find_domain_id(base_domain, ext)
 
         try:
@@ -361,32 +500,8 @@ class NICClient:
                 csrf_token = token_match.group(1) if token_match else ""
 
                 patch_url = f"{self.base_url}/domain/{existing_id}"
-                data = {
-                    "_token": csrf_token,
-                    "_method": "PATCH",
-                    "domain": base_domain,
-                    "registrar": settings.NIC_REGISTRAR,
-                    "reg_renewal": reg_date_str,
-                    "customername": customer_name,
-                    "address": address or "Thimphu, Bhutan",
-                    "postalcode": postalcode or settings.NIC_PLACEHOLDER,
-                    "phone": phone or "+975",
-                    "email": email,
-                    "country": country or settings.NIC_DEFAULT_COUNTRY,
-                    "tech_name": customer_name,
-                    "tech_address": address or "Thimphu, Bhutan",
-                    "tech_postalcode": postalcode or settings.NIC_PLACEHOLDER,
-                    "tech_phone": phone or "+975",
-                    "tech_fax": settings.NIC_PLACEHOLDER,
-                    "tech_country": country or settings.NIC_DEFAULT_COUNTRY,
-                    "tech_email": email,
-                    "billing_name": customer_name,
-                    "billing_address": address or "Thimphu, Bhutan",
-                    "billing_contact": phone or "+975",
-                    "billing_fax": settings.NIC_PLACEHOLDER,
-                    "billing_country": country or "BT",
-                    "billing_email": email
-                }
+                data["_token"] = csrf_token
+                data["_method"] = "PATCH"
 
                 resp = _request_with_retry(
                     self.session, "POST", patch_url, data=data,
@@ -414,32 +529,7 @@ class NICClient:
                 csrf_token = token_match.group(1) if token_match else ""
 
                 post_url = f"{self.base_url}/domain"
-                data = {
-                    "_token": csrf_token,
-                    "domain": base_domain,
-                    "ext": ext,
-                    "registrar": settings.NIC_REGISTRAR,
-                    "reg_renewal": reg_date_str,
-                    "customername": customer_name,
-                    "address": address or "Thimphu, Bhutan",
-                    "postalcode": postalcode or settings.NIC_PLACEHOLDER,
-                    "phone": phone or "+975",
-                    "email": email,
-                    "country": country or settings.NIC_DEFAULT_COUNTRY,
-                    "tech_name": customer_name,
-                    "tech_address": address or "Thimphu, Bhutan",
-                    "tech_postalcode": postalcode or settings.NIC_PLACEHOLDER,
-                    "tech_phone": phone or "+975",
-                    "tech_fax": settings.NIC_PLACEHOLDER,
-                    "tech_country": country or settings.NIC_DEFAULT_COUNTRY,
-                    "tech_email": email,
-                    "billing_name": customer_name,
-                    "billing_address": address or "Thimphu, Bhutan",
-                    "billing_contact": phone or "+975",
-                    "billing_fax": settings.NIC_PLACEHOLDER,
-                    "billing_country": country or "BT",
-                    "billing_email": email
-                }
+                data["_token"] = csrf_token
 
                 resp = _request_with_retry(
                     self.session, "POST", post_url, data=data,

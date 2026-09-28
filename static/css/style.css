@@ -1316,3 +1316,101 @@ select.custom-select:focus {
   color: var(--text-dim);
   margin-top: 2px;
 }
+
+/* ========================================================
+   nic.bt.bt REGISTRY FORM
+   All 23 required fields, grouped into the portal's four
+   sections. Rendered from the field spec, so this styles
+   whatever the registry actually requires.
+   ======================================================== */
+
+.nic-reg-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+.nic-reg-head .form-hint { margin: 0; max-width: 62ch; }
+.nic-reg-head em { font-style: normal; color: var(--text-main); font-weight: 600; }
+
+.nic-reg-form { display: flex; flex-direction: column; gap: 18px; }
+
+.nic-reg-group {
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  padding: 12px 14px 14px;
+}
+.nic-reg-group-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--primary);
+  margin: 0 0 10px;
+}
+.nic-reg-group-count {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0;
+  color: var(--text-dim);
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  padding: 1px 7px;
+}
+
+.nic-reg-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 12px 14px;
+}
+.nic-reg-field { margin: 0; }
+.nic-reg-field .form-label { font-size: 12px; }
+.nic-reg-field input,
+.nic-reg-field select {
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-color);
+  background: var(--bg-card);
+  color: var(--text-main);
+  font-size: 13px;
+}
+.nic-reg-field input:focus,
+.nic-reg-field select:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+/* A field the operator has overridden: marked so the automatic copies do not
+   look like values they typed themselves. */
+.nic-reg-field.is-touched .form-label::after {
+  content: "edited";
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--primary);
+  background: rgba(99, 102, 241, 0.12);
+  border-radius: 999px;
+  padding: 1px 6px;
+  margin-left: 6px;
+}
+.nic-reg-source { font-size: 11px; }
+.nic-reg-source[data-source="derived"] { color: var(--text-dim); }
+.nic-reg-source[data-source="default"] { color: var(--primary); opacity: 0.85; }
+
+.nic-reg-missing {
+  margin-top: 14px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--accent-rose, #f43f5e);
+  background: rgba(244, 63, 94, 0.08);
+  color: #fda4af;
+  font-size: 12px;
+  line-height: 1.5;
+}
