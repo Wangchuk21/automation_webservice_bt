@@ -764,6 +764,23 @@ async function runDnsCheck(domain, panel) {
   return data;
 }
 
+async function checkDnsAfterProvisioning(domain, panel) {
+  const box = document.getElementById("res-dns-status");
+  if (!box || !domain) return;
+  box.classList.remove("hidden");
+  box.className = "res-dns-status";
+  box.innerHTML = '<span class="form-hint">Checking whether the domain points at this server&hellip;</span>';
+  try {
+    renderDns(box, await runDnsCheck(domain, panel || "cpanel"), true);
+  } catch (e) {
+    // Never worth alarming anyone about: the account exists either way.
+    box.className = "res-dns-status dns-warn";
+    box.innerHTML = `<div class="dns-head"><span class="dns-badge">Not checked</span>
+        <code>${esc(domain)}</code></div>
+      <p>The DNS check could not be completed. The hosting account is unaffected.</p>`;
+  }
+}
+
 async function checkDnsFromToolbar() {
   const input = document.getElementById("dns_domain");
   const panel = document.getElementById("dns_panel");
@@ -990,7 +1007,10 @@ async function handleProvisionSubmit(e) {
     latestAccountData = result.data;
     renderResult(result.data);
     renderNicStatus(result.data.nic_status);
-    renderDns(document.getElementById("res-dns-status"), result.data.dns, true);
+    // Asked for separately, after the account is safely created. Keeping the
+    // lookup out of the provisioning request means a slow or broken resolver
+    // cannot delay it, and cannot make a successful provisioning look failed.
+    checkDnsAfterProvisioning(result.data.domain, result.data.panel);
     showToast(`Account for ${result.data.domain} successfully provisioned!`, "success");
 
   } catch (error) {

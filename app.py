@@ -442,12 +442,6 @@ async def create_account(payload: AccountCreateRequest):
             "handover_text": result.handover_text,
             "email_status": email_status,
             "nic_status": nic_status,
-            # The account existing is not the same as the domain being
-            # reachable, and the handover kit is where an operator would
-            # otherwise assume it is. A dry run is not reported: no account was
-            # created, so a DNS result would say nothing about the outcome.
-            "dns": (None if payload.dry_run
-                    else check_domain(result.domain, panel=payload.panel)),
         }
     }
 
@@ -909,7 +903,19 @@ async def dns_check(
     domain = (domain or "").strip()
     if not domain:
         raise HTTPException(status_code=422, detail="A domain is required.")
-    return check_domain(domain, panel=panel, probe=probe)
+    try:
+        return check_domain(domain, panel=panel, probe=probe)
+    except Exception as e:
+        # Informational only. A failure to look up DNS must be reported as a
+        # failed lookup, not as a failed request, so nothing that depends on
+        # this endpoint can be broken by it.
+        logger.warning("DNS check for %s could not be completed: %s", domain, e)
+        return {
+            "domain": domain, "status": "error", "resolved": [], "ours": [],
+            "web_answers": None,
+            "message": "The DNS check could not be completed. The hosting "
+                       "account itself is unaffected.",
+        }
 
 
 @app.get("/api/v1/nic/field-spec", dependencies=[Depends(require_api_token)])

@@ -223,20 +223,56 @@ class TestDnsEndpoint(unittest.TestCase):
         self.assertEqual(r.status_code, 422)
 
 
-class TestProvisioningIncludesTheCheck(unittest.TestCase):
-    """The handover kit is where an operator would otherwise assume a working
-    site, so the result travels with the account it describes."""
+class TestItCannotBlockOrFailProvisioning(unittest.TestCase):
+    """
+    A DNS lookup is informational. The asked-for guarantee is that an unresolvable
+    domain neither stops nor undoes anything, and the second is the one that
+    matters: a lookup that failed *after* the account was created would return an
+    error, the dashboard would report "Provisioning Failed", and an operator
+    retrying would create a duplicate account.
+    """
 
-    def test_a_dry_run_reports_no_dns(self):
-        """No account was created, so a DNS result would say nothing about the
-        outcome and would only confuse."""
-        source = (Path(__file__).resolve().parent.parent / "app.py").read_text()
-        self.assertIn("None if payload.dry_run", source)
+    @classmethod
+    def setUpClass(cls):
+        root = Path(__file__).resolve().parent.parent
+        cls.app = (root / "app.py").read_text()
+        cls.js = (root / "static" / "js" / "app.js").read_text()
 
-    def test_the_result_carries_the_check(self):
-        source = (Path(__file__).resolve().parent.parent / "app.py").read_text()
-        self.assertIn('"dns":', source)
-        self.assertIn("check_domain(result.domain", source)
+    def test_provisioning_does_not_call_the_check(self):
+        # The endpoint's call, and nothing else. Any other call site would mean
+        # a lookup had crept back onto the provisioning path.
+        self.assertEqual(self.app.count("check_domain(domain, panel=panel"), 1)
+        self.assertNotIn("check_domain(result.domain", self.app)
+
+    def test_the_check_is_requested_after_the_account_exists(self):
+        self.assertIn("checkDnsAfterProvisioning", self.js)
+        body = self.js.split("async function checkDnsAfterProvisioning")[1][:1200]
+        self.assertIn("renderDns", body)
+        self.assertIn("catch", body)
+
+    def test_a_failed_check_shows_a_status_rather_than_an_error(self):
+        """The operator must not read a DNS problem as a provisioning problem."""
+        self.assertIn("The hosting account is unaffected", self.js)
+
+    def test_an_unexpected_error_becomes_a_status_not_a_500(self):
+        # Anchored to the endpoint's own body: app.py has other except
+        # handlers, and scanning the whole file finds the wrong one.
+        body = self.app.split('@app.get("/api/v1/dns/check"')[1].split("\n\n\n")[0]
+        self.assertIn("except Exception as e:", body)
+        self.assertIn('"status": "error"', body)
+
+    def test_the_endpoint_never_raises_to_the_caller(self):
+        import app as app_module
+        app_module.app.dependency_overrides[app_module.require_api_token] = lambda: None
+        try:
+            client = TestClient(app_module.app, raise_server_exceptions=False)
+            with patch.object(app_module, "check_domain", side_effect=RuntimeError("boom")):
+                r = client.get("/api/v1/dns/check", params={"domain": "wank.bt"})
+            self.assertEqual(r.status_code, 200)
+            self.assertEqual(r.json()["status"], "error")
+            self.assertIn("unaffected", r.json()["message"])
+        finally:
+            app_module.app.dependency_overrides = {}
 
 
 if __name__ == "__main__":
