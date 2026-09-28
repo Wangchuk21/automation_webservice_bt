@@ -157,6 +157,10 @@ class TestCpanelIpv6(unittest.TestCase):
         got = cp('{"metadata":{"result":1,"reason":"OK"}}').enable_ipv6("wankbt")
         self.assertTrue(got["success"])
         self.assertIn("wankbt", got["message"])
+        # Present tense: this also runs on updates, where nothing was assigned
+        # just now. cPanel accepts the repeat and issues no second address.
+        self.assertIn("is assigned", got["message"])
+        self.assertNotIn("assigned to", got["message"].replace("is assigned to", ""))
 
     def test_a_failure_says_why(self):
         got = cp('{"metadata":{"result":0,"reason":"No such account"}}').enable_ipv6("wankbt")

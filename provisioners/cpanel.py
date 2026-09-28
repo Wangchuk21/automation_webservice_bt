@@ -427,8 +427,12 @@ class CPanelProvisioner(BaseProvisioner):
 
         body = " ".join((out or err or "").split())
         if '"result":1' in body.replace(" ", "").replace('"result": 1', '"result":1'):
+            # "is assigned", not "assigned": this also runs on updates, where
+            # the address was assigned at creation. cPanel accepts the repeat
+            # silently and issues no second address, and a message claiming it
+            # just happened would be wrong every time after the first.
             return {"success": True, "step": "ipv6",
-                    "message": f"IPv6 assigned to {username} from the "
+                    "message": f"IPv6 is assigned to {username} from the "
                                f"{settings.CPANEL_IPV6_RANGE} range."}
         if '"result":0' in body.replace(" ", "").replace('"result": 0', '"result":0'):
             reason = self._whm_reason(body)
