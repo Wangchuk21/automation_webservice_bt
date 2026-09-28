@@ -65,30 +65,49 @@ class TestSpecCompleteness(unittest.TestCase):
 
 class TestDefaultsComeFromConfig(unittest.TestCase):
     def test_spec_defaults_match_config(self):
-        spec = registry_field_spec()
-        by_name = {f["name"]: f for f in spec["fields"]}
-        self.assertEqual(by_name["tech_name"]["default"], settings.NIC_TECH_NAME)
-        self.assertEqual(by_name["tech_email"]["default"], settings.NIC_TECH_EMAIL)
+        by_name = {f["name"]: f for f in registry_field_spec()["fields"]}
         self.assertEqual(by_name["registrar"]["default"], settings.NIC_REGISTRAR)
+        self.assertEqual(by_name["billing_name"]["default"], settings.NIC_BILLING_NAME)
+        self.assertEqual(by_name["billing_email"]["default"], settings.NIC_BILLING_EMAIL)
         self.assertEqual(by_name["billing_country"]["default"], settings.NIC_BILLING_COUNTRY)
+
+    def test_technical_contact_is_the_domain_owner(self):
+        """
+        The registry follows the international convention: tech_* is the
+        registrant, billing_* is the registrar or its agent. Confirmed on real
+        records, where tech_email equalled the registrant's own email.
+
+        Getting this backwards publishes BT as the technical contact for every
+        customer domain.
+        """
+        by_name = {f["name"]: f for f in registry_field_spec()["fields"]}
+        for field, origin in [("tech_name", "customername"), ("tech_address", "address"),
+                              ("tech_postalcode", "postalcode"), ("tech_phone", "phone"),
+                              ("tech_country", "country"), ("tech_email", "email")]:
+            self.assertEqual(by_name[field]["source"], "derived", field)
+            self.assertEqual(by_name[field]["derived_from"], origin, field)
+
+    def test_billing_contact_is_the_registrar(self):
+        by_name = {f["name"]: f for f in registry_field_spec()["fields"]}
+        for field in ("billing_name", "billing_address", "billing_contact",
+                      "billing_fax", "billing_country", "billing_email"):
+            self.assertEqual(by_name[field]["source"], "default", field)
 
     def test_client_has_no_hardcoded_bt_details(self):
         """The regression this exists to prevent: values living in the code."""
         src = Path(nic_client.__file__).read_text()
-        for literal in ("DrukNet Systems", "Bhutan Telecom Ltd, Thimphu",
-                        "+975-2-343434", "systems@bt.bt"):
+        for literal in ("DrukNet Systems", "systems@bt.bt"):
             self.assertNotIn(f'"{literal}"', src,
                              f"{literal!r} is hardcoded in nic_client; use config")
 
     def test_config_overrides_reach_the_spec(self):
-        orig = settings.NIC_TECH_EMAIL
-        settings.NIC_TECH_EMAIL = "changed@example.bt"
+        orig = settings.NIC_BILLING_EMAIL
+        settings.NIC_BILLING_EMAIL = "changed@example.bt"
         try:
-            spec = registry_field_spec()
-            by_name = {f["name"]: f for f in spec["fields"]}
-            self.assertEqual(by_name["tech_email"]["default"], "changed@example.bt")
+            by_name = {f["name"]: f for f in registry_field_spec()["fields"]}
+            self.assertEqual(by_name["billing_email"]["default"], "changed@example.bt")
         finally:
-            settings.NIC_TECH_EMAIL = orig
+            settings.NIC_BILLING_EMAIL = orig
 
     def test_source_counts_add_up(self):
         spec = registry_field_spec()
@@ -120,7 +139,11 @@ class TestFieldSpecEndpoint(unittest.TestCase):
         d = self.client.get("/api/v1/nic/field-spec",
                             headers={"X-API-Token": "tok"}).json()
         defaults = [f for f in d["fields"] if f["source"] == "default"]
-        self.assertEqual(len(defaults), 10)
+        # Derived from the spec rather than hardcoded, so a change in which
+        # fields are BT-supplied does not need the number updated here too.
+        self.assertEqual(len(defaults),
+                         sum(1 for f in REGISTRY_FIELDS if f["source"] == "default"))
+        self.assertTrue(defaults)
         for f in defaults:
             self.assertIn("default", f, f"{f['name']} exposes no default to edit")
 

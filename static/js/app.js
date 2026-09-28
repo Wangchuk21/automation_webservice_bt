@@ -215,6 +215,7 @@ async function loadSuspensionReport() {
     }
 
     const age = d.age_hours;
+    const doneCount = ((d.candidates_all) || []).filter((c) => c.live_suspended).length;
     const staleNote = d.stale
       ? ` <strong style="color:#fcd34d">⚠ STALE — last run was ${esc(age)}h ago. ` +
         `A failed run writes no record, so this list may be out of date; check the ` +
@@ -224,36 +225,56 @@ async function loadSuspensionReport() {
     summary.innerHTML =
       `Last run <strong>${esc(d.generated_at)}</strong>${staleNote} · ` +
       `${esc(d.total_accounts)} accounts checked · ` +
-      `<strong>${esc((d.candidates || []).length)}</strong> awaiting review · ` +
-      `${esc(d.already_suspended_billing)} already suspended for billing · ` +
+      `<strong>${esc((d.candidates || []).length)}</strong> awaiting review` +
+      (doneCount ? ` · <span style="color:#6ee7b7">${esc(doneCount)} already suspended since</span>` : "") +
+      ` · ${esc(d.already_suspended_billing)} already suspended for billing · ` +
       `${esc(d.suspended_other_reason)} suspended for other reasons (left alone) · ` +
       `${esc(d.no_match)} no billing match` +
       (d.bscs_complete ? "" : ` <strong style="color:#fcd34d">· INCOMPLETE: ${esc(d.bscs_note)}</strong>`);
 
-    renderSuspensionCandidates(d.candidates || []);
+    renderSuspensionCandidates(d.candidates || [], d.candidates_all || []);
     renderUnmatched(d.unmatched_contracts || []);
   } catch (e) {
     summary.textContent = e.message;
   }
 }
 
-function renderSuspensionCandidates(candidates) {
+function renderSuspensionCandidates(candidates, all) {
   const box = document.getElementById("suspension-candidates");
-  if (!candidates.length) {
+  if (!candidates.length && !(all || []).length) {
     box.innerHTML = '<span class="form-hint">Nothing awaiting review.</span>';
     return;
   }
-  box.innerHTML = `<table class="surrender-table">
-    <thead><tr><th>Panel</th><th>Account</th><th>Domain</th><th>Contract</th><th>Action</th></tr></thead>
-    <tbody>${candidates.map((c) => `<tr>
+
+  // Anything the run flagged that has since been suspended is shown as done, so
+  // a completed action visibly stays completed instead of reappearing as
+  // pending on every page load until the next nightly run.
+  const done = (all || []).filter((c) => c.live_suspended);
+
+  const rows = (candidates || []).map((c) => `<tr>
       <td>${esc(c.panel)}</td>
       <td>${esc(c.username)}</td>
       <td><strong>${esc(c.domain)}</strong></td>
       <td><code>${esc(c.contract || "-")}</code></td>
+      <td><span class="pill pill-pending">not suspended</span></td>
       <td><button class="btn btn-danger btn-sm"
-            data-panel="${esc(c.panel)}" data-user="${esc(c.username)}"
             onclick="suspendNow('${esc(c.panel)}','${esc(c.username)}')">Suspend</button></td>
-    </tr>`).join("")}</tbody></table>`;
+    </tr>`).join("");
+
+  const doneRows = done.map((c) => `<tr class="row-done">
+      <td>${esc(c.panel)}</td>
+      <td>${esc(c.username)}</td>
+      <td>${esc(c.domain)}</td>
+      <td><code>${esc(c.contract || "-")}</code></td>
+      <td><span class="pill pill-done">suspended${c.live_reason ? " &middot; " + esc(c.live_reason) : ""}</span></td>
+      <td class="muted">done</td>
+    </tr>`).join("");
+
+  box.innerHTML = `<table class="surrender-table">
+    <thead><tr><th>Panel</th><th>Account</th><th>Domain</th><th>Contract</th><th>Live status</th><th>Action</th></tr></thead>
+    <tbody>${rows}${doneRows}</tbody></table>` +
+    (done.length ? `<p class="form-hint">${esc(done.length)} of these were suspended from
+      this page after the last run — shown as done, verified against the panel just now.</p>` : "");
 }
 
 function renderUnmatched(rows) {

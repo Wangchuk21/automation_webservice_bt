@@ -1,4 +1,5 @@
 import secrets
+import logging
 from fastapi import FastAPI, HTTPException, Request, Depends, Header, Form, UploadFile, File
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -44,6 +45,8 @@ app = FastAPI(
     description="Automated Shared Hosting Provisioning for cPanel and DirectAdmin",
     version="1.0.0"
 )
+
+logger = logging.getLogger("app")
 
 
 @app.middleware("http")
@@ -701,6 +704,38 @@ async def suspension_report():
             age_hours = round((_dt.now(gen.tzinfo) - gen).total_seconds() / 3600.0, 1)
         except (ValueError, TypeError):
             age_hours = None
+    # The record is a snapshot taken at the last run, so an account suspended
+    # from the dashboard afterwards still shows as a candidate until the next
+    # nightly run -- a finished job looking permanently outstanding. Re-read the
+    # live state of each candidate (there are only ever a handful) so the
+    # dashboard reflects what is true now, not what was true at 02:17.
+    candidates = []
+    for d in rec.get("decisions", []):
+        if d.get("action") != SUSPEND:
+            continue
+        entry = dict(d)
+        entry["live_suspended"] = None
+        entry["live_reason"] = ""
+        try:
+            panel = (d.get("panel") or "").lower()
+            if panel in ("cpanel", "whm"):
+                prov = get_cpanel_provisioner()
+            elif panel in ("directadmin", "da"):
+                prov = get_da_provisioner()
+            else:
+                prov = None
+            if prov is not None:
+                state = prov.account_state(d.get("username", ""))
+                if state is not None:
+                    entry["live_suspended"] = bool(state.get("suspended"))
+                    entry["live_reason"] = state.get("reason", "")
+        except Exception as e:  # An unreachable panel must not break the report.
+            logger.warning("Live state check failed for %s/%s: %s",
+                           d.get("panel"), d.get("username"), e)
+        candidates.append(entry)
+
+    outstanding = [c for c in candidates if not c["live_suspended"]]
+
     return {
         "available": True,
         "generated_at": generated,
@@ -709,7 +744,12 @@ async def suspension_report():
         "total_accounts": rec.get("total_accounts", 0),
         "bscs_complete": rec.get("bscs_complete", True),
         "bscs_note": rec.get("bscs_note", ""),
-        "candidates": [d for d in rec.get("decisions", []) if d.get("action") == SUSPEND],
+        # Outstanding right now, verified against the panel rather than the
+        # snapshot.
+        "candidates": outstanding,
+        # Everything the run flagged, with its current state attached, so one
+        # acted on since the run reads as done rather than silently vanishing.
+        "candidates_all": candidates,
         "already_suspended_billing": counts.get(SKIP_ALREADY_BILLING, 0),
         "suspended_other_reason": counts.get(SKIP_OTHER_REASON, 0),
         "no_match": counts.get(SKIP_NO_MATCH, 0),

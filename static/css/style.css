@@ -1173,3 +1173,14 @@ select.custom-select:focus {
   white-space: pre-wrap;
   word-break: break-word;
 }
+
+.pill {
+  font-size: 10.5px;
+  padding: 2px 9px;
+  border-radius: var(--radius-full);
+  white-space: nowrap;
+}
+.pill-pending { background: rgba(245,158,11,.18); color: #fcd34d; }
+.pill-done    { background: rgba(16,185,129,.18); color: #6ee7b7; }
+.row-done td  { opacity: 0.72; }
+.row-done .muted { color: var(--text-dim); font-size: 12px; }

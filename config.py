@@ -127,22 +127,31 @@ class Config:
     NIC_PASSWORD: str = os.getenv("NIC_PASSWORD", "")
 
     # --- nic.bt.bt registry field defaults ---
-    # The registry's domain form has 23 required fields. Only six come from the
-    # customer (name, address, postal code, phone, email, country); the rest are
-    # Bhutan Telecom's own registrar and technical-contact details, which used to
-    # be hardcoded inside nic_client.py. They live here so they can be corrected
-    # without a code change, and so the dashboard can show the operator exactly
-    # what will be submitted instead of silently guessing.
+    # The registry's domain form has 23 required fields, and it follows the
+    # international convention -- confirmed against real records on the portal,
+    # where tech_email was identical to the registrant's own email on every
+    # record sampled:
+    #
+    #   tech_*    = the DOMAIN OWNER. The technical contact is the customer,
+    #               not the registrar.
+    #   billing_* = the REGISTRAR or its billing agent. Those same records
+    #               carried the agent's details (MarkMonitor / CCOPs) here, not
+    #               the customer's.
+    #
+    # So Bhutan Telecom's own details belong in the BILLING block and the
+    # technical block is derived from the customer. Having it the other way
+    # round publishes BT as the technical contact for every customer domain,
+    # which is wrong for any domain whose owner manages their own DNS.
+    #
+    # These values are still unconfirmed with the registry; they are
+    # configurable, and the dashboard shows every field before submitting.
     NIC_REGISTRAR: str = os.getenv("NIC_REGISTRAR", "DrukNet")
-    NIC_TECH_NAME: str = os.getenv("NIC_TECH_NAME", "DrukNet Systems")
-    NIC_TECH_ADDRESS: str = os.getenv("NIC_TECH_ADDRESS", "Bhutan Telecom Ltd, Thimphu")
-    NIC_TECH_POSTALCODE: str = os.getenv("NIC_TECH_POSTALCODE", "-")
-    NIC_TECH_PHONE: str = os.getenv("NIC_TECH_PHONE", "+975-2-343434")
-    NIC_TECH_FAX: str = os.getenv("NIC_TECH_FAX", "-")
-    NIC_TECH_COUNTRY: str = os.getenv("NIC_TECH_COUNTRY", "BT")
-    NIC_TECH_EMAIL: str = os.getenv("NIC_TECH_EMAIL", "systems@bt.bt")
+    NIC_BILLING_NAME: str = os.getenv("NIC_BILLING_NAME", "Bhutan Telecom Ltd")
+    NIC_BILLING_ADDRESS: str = os.getenv("NIC_BILLING_ADDRESS", "Thimphu, Bhutan")
+    NIC_BILLING_CONTACT: str = os.getenv("NIC_BILLING_CONTACT", "+975-2-343434")
     NIC_BILLING_FAX: str = os.getenv("NIC_BILLING_FAX", "-")
     NIC_BILLING_COUNTRY: str = os.getenv("NIC_BILLING_COUNTRY", "BT")
+    NIC_BILLING_EMAIL: str = os.getenv("NIC_BILLING_EMAIL", "systems@bt.bt")
     # Placeholder used where the registry marks a field required but there is
     # genuinely no value. Real records on the registry use "-" for these.
     NIC_PLACEHOLDER: str = os.getenv("NIC_PLACEHOLDER", "-")
