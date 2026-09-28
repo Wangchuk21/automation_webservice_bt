@@ -2,7 +2,7 @@ import logging
 import re
 import time
 from datetime import date
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, List, Optional, Tuple
 import requests
 from config import settings
 from tls_config import resolve_verify
@@ -131,6 +131,56 @@ def registry_field_spec() -> Dict[str, Any]:
     }
 
 
+def _strip_tags(html: str) -> str:
+    """Strip tags and collapse whitespace, for reading option labels."""
+    return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html or "")).strip()
+
+
+def _reject_unsupported_ext(ext: str, offered: List[str]) -> None:
+    """
+    Fail with a clear message when the derived extension is not one the
+    registry offers.
+
+    Without this the submission reaches the portal and comes back as an opaque
+    validation error, which is hard to trace back to a mistyped domain. Skipped
+    when the dropdown could not be read, so a change in the form's markup
+    degrades to the portal's own error rather than a false rejection.
+    """
+    if not offered or ext in offered:
+        return
+    raise ValueError(f"Extension '{ext}' is not offered by nic.bt.bt. "
+                     f"Available: {', '.join(offered)}")
+
+
+def available_extensions(html: str) -> List[str]:
+    """
+    Read the extension options the registry's own form offers.
+
+    That dropdown is the authority on what nic.bt.bt accepts, so it is read
+    from the page being submitted rather than hardcoded. A hardcoded list
+    drifts silently: an extension the portal adds would be rejected with an
+    opaque error, and one it removes would still be sent.
+    """
+    opts: List[str] = []
+    for tag in re.findall(r"<select[^>]*>.*?</select>", html or "", re.I | re.S):
+        name = re.search(r'name\s*=\s*["\']?([^"\'\s>]+)', tag, re.I)
+        if not name or name.group(1) != "ext":
+            continue
+        for attrs, label in re.findall(r"<option([^>]*)>(.*?)</option>", tag, re.I | re.S):
+            text = _strip_tags(label)
+            # The empty option is rendered as "Choose.." but carries the value
+            # NULL_VALUE, so the label is what identifies it as a placeholder.
+            if not text or text.lower().startswith(("choose", "select", "-")):
+                continue
+            value = re.search(r'value\s*=\s*["\']([^"\']*)["\']', attrs, re.I)
+            val = (value.group(1) if value else text).strip()
+            if not val or val.upper() in ("NULL_VALUE", "NULL", "NONE"):
+                continue
+            if val not in opts:
+                opts.append(val)
+    return opts
+
+
 def split_domain_ext(full_domain: str) -> Tuple[str, str]:
     """
     Splits domain into base name and extension.
@@ -256,6 +306,7 @@ class NICClient:
                 # Update existing domain
                 edit_url = f"{self.base_url}/domain/{existing_id}/edit"
                 r_edit = self.session.get(edit_url, timeout=REGISTRY_TIMEOUT)
+                _reject_unsupported_ext(ext, available_extensions(r_edit.text))
                 token_match = re.search(r'name=["\x27]_token["\x27]\s+value=["\x27]([^"\x27]+)["\x27]', r_edit.text)
                 csrf_token = token_match.group(1) if token_match else ""
 
@@ -308,6 +359,7 @@ class NICClient:
                 # Create new domain
                 create_url = f"{self.base_url}/domain/create"
                 r_create = self.session.get(create_url, timeout=REGISTRY_TIMEOUT)
+                _reject_unsupported_ext(ext, available_extensions(r_create.text))
                 token_match = re.search(r'name=["\x27]_token["\x27]\s+value=["\x27]([^"\x27]+)["\x27]', r_create.text)
                 csrf_token = token_match.group(1) if token_match else ""
 
