@@ -114,6 +114,13 @@
                      oninput="onDomainChanged(this.value)">
             </div>
             <span class="form-hint">The primary domain for this hosting account.</span>
+
+            <!-- Checked as the domain is typed, before anything is created, so
+                 a domain that does not point here is known before an account
+                 exists rather than discovered afterwards. Advisory only: DNS is
+                 routinely set up after the hosting account, and blocking on it
+                 would break the normal order of work. -->
+            <div id="dns-precheck" class="res-dns-status hidden"></div>
           </div>
 
           <!-- Username & Password Row -->

@@ -575,12 +575,20 @@ document.addEventListener("DOMContentLoaded", () => {
     sync();
   }
 
-  // The domain drives the two computed fields and anything copied from them.
+  // The domain drives the two computed fields, the DNS pre-check and anything
+  // copied from them.
   const domain = document.getElementById("domain");
   if (domain) {
-    domain.addEventListener("input", syncRegistryFields);
-    domain.addEventListener("change", syncRegistryFields);
+    domain.addEventListener("input", () => { syncRegistryFields(); scheduleDnsPrecheck(); });
+    domain.addEventListener("change", () => { syncRegistryFields(); scheduleDnsPrecheck(); });
   }
+
+  // Changing the panel changes which address counts as "ours".
+  document.querySelectorAll('input[name="panel"]').forEach((radio) => {
+    radio.addEventListener("change", () => {
+      if (LAST_DNS.result) scheduleDnsPrecheck();
+    });
+  });
 
   const refill = document.getElementById("nic-reg-refill");
   if (refill) {
@@ -764,6 +772,19 @@ async function runDnsCheck(domain, panel) {
   return data;
 }
 
+// The last result, so the handover kit can show it without looking it up a
+// second time. DNS does not change while the operator is filling the form in.
+let LAST_DNS = { domain: null, result: null };
+
+// Checked while the domain is being typed, so the answer is known before
+// anything is created rather than afterwards.
+let dnsPrecheckTimer = null;
+let dnsPrecheckSeq = 0;
+
+// Fallback for the case where the pre-check did not run or did not finish: the
+// domain typed too quickly, the field changed after the check, or the operator
+// arrived with the box already filled. The account exists by this point, so this
+// can only ever add information.
 async function checkDnsAfterProvisioning(domain, panel) {
   const box = document.getElementById("res-dns-status");
   if (!box || !domain) return;
@@ -773,11 +794,52 @@ async function checkDnsAfterProvisioning(domain, panel) {
   try {
     renderDns(box, await runDnsCheck(domain, panel || "cpanel"), true);
   } catch (e) {
-    // Never worth alarming anyone about: the account exists either way.
     box.className = "res-dns-status dns-warn";
     box.innerHTML = `<div class="dns-head"><span class="dns-badge">Not checked</span>
         <code>${esc(domain)}</code></div>
       <p>The DNS check could not be completed. The hosting account is unaffected.</p>`;
+  }
+}
+
+function scheduleDnsPrecheck() {
+  clearTimeout(dnsPrecheckTimer);
+  const domain = currentDomain();
+  const box = document.getElementById("dns-precheck");
+  if (!box) return;
+
+  if (!domain || domain.indexOf(".") < 0) {
+    box.classList.add("hidden");
+    box.innerHTML = "";
+    LAST_DNS = { domain: null, result: null };
+    return;
+  }
+
+  // "Not a domain yet" is not a finding; say nothing until it could resolve.
+  box.classList.remove("hidden");
+  box.className = "res-dns-status";
+  box.innerHTML = '<span class="form-hint">Checking DNS&hellip;</span>';
+
+  // Debounced: a lookup per keystroke would hammer the resolver for no gain.
+  dnsPrecheckTimer = setTimeout(() => runDnsPrecheck(domain, box), 700);
+}
+
+async function runDnsPrecheck(domain, box) {
+  const panelEl = document.querySelector('input[name="panel"]:checked');
+  const panel = panelEl ? panelEl.value : "cpanel";
+  const seq = ++dnsPrecheckSeq;
+  try {
+    const result = await runDnsCheck(domain, panel);
+    // A newer keystroke may have moved on while this was in flight.
+    if (seq !== dnsPrecheckSeq || currentDomain() !== domain) return;
+    renderDns(box, result, true);
+    LAST_DNS = { domain: domain, result: result };
+  } catch (e) {
+    if (seq !== dnsPrecheckSeq) return;
+    box.className = "res-dns-status dns-warn";
+    box.innerHTML = `<div class="dns-head"><span class="dns-badge">Not checked</span>
+        <code>${esc(domain)}</code></div>
+      <p>The DNS check could not be completed. This does not affect provisioning.</p>`;
+    LAST_DNS = { domain: null, result: null };
   }
 }
 
@@ -1010,7 +1072,14 @@ async function handleProvisionSubmit(e) {
     // Asked for separately, after the account is safely created. Keeping the
     // lookup out of the provisioning request means a slow or broken resolver
     // cannot delay it, and cannot make a successful provisioning look failed.
-    checkDnsAfterProvisioning(result.data.domain, result.data.panel);
+    // Reuses the pre-check: the same domain, seconds apart, and DNS did not
+    // change in between. A fresh lookup here would only risk a second wait.
+    const pre = LAST_DNS;
+    if (pre.result && pre.domain === result.data.domain) {
+      renderDns(document.getElementById("res-dns-status"), pre.result, true);
+    } else {
+      checkDnsAfterProvisioning(result.data.domain, result.data.panel);
+    }
     showToast(`Account for ${result.data.domain} successfully provisioned!`, "success");
 
   } catch (error) {

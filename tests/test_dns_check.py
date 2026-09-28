@@ -237,6 +237,7 @@ class TestItCannotBlockOrFailProvisioning(unittest.TestCase):
         root = Path(__file__).resolve().parent.parent
         cls.app = (root / "app.py").read_text()
         cls.js = (root / "static" / "js" / "app.js").read_text()
+        cls.index = (root / "templates" / "index.html").read_text()
 
     def test_provisioning_does_not_call_the_check(self):
         # The endpoint's call, and nothing else. Any other call site would mean
@@ -244,20 +245,54 @@ class TestItCannotBlockOrFailProvisioning(unittest.TestCase):
         self.assertEqual(self.app.count("check_domain(domain, panel=panel"), 1)
         self.assertNotIn("check_domain(result.domain", self.app)
 
-    def test_the_check_is_requested_after_the_account_exists(self):
-        self.assertIn("checkDnsAfterProvisioning", self.js)
-        body = self.js.split("async function checkDnsAfterProvisioning")[1][:1200]
-        self.assertIn("renderDns", body)
-        self.assertIn("catch", body)
+    def test_the_check_runs_before_anything_is_created(self):
+        """The point of moving it: a domain that does not point here should be
+        known before an account exists for it."""
+        self.assertTrue("scheduleDnsPrecheck" in self.js)
+        self.assertTrue("dns-precheck" in self.index)
+        body = self.js.split("function scheduleDnsPrecheck()")[1][:900]
+        self.assertIn("runDnsPrecheck", body)
+        self.assertIn("setTimeout", body)
+
+    def test_the_precheck_is_never_a_block(self):
+        """DNS is routinely pointed at a new account after the account is made.
+        Refusing to provision on an unresolvable domain would break the normal
+        order of work, and our own resolver failing must not block anyone.
+
+        Checked by reading only the part of the submit handler that runs before
+        the request is sent: it must contain no DNS logic and no early exit.
+        """
+        body = self.js.split("async function handleProvisionSubmit")[1]
+        before_request = body.split("const response = await fetch")[0]
+        self.assertNotIn("dns", before_request.lower().replace("nic", ""),
+                         "DNS must not appear in the path that can block a submit")
+
+    def test_the_handover_kit_reuses_the_precheck(self):
+        """The same domain seconds later; a second lookup would only add a wait
+        and could disagree with what was already shown."""
+        self.assertTrue("LAST_DNS" in self.js)
+        self.assertTrue("pre.domain === result.data.domain" in self.js)
+
+    def test_a_stale_in_flight_result_is_discarded(self):
+        """Typing continues while a lookup is in flight; a late reply for an
+        earlier domain must not overwrite the current one."""
+        self.assertTrue("dnsPrecheckSeq" in self.js)
+        self.assertTrue("if (seq !== dnsPrecheckSeq" in self.js)
+
+    def test_the_standalone_checker_still_works(self):
+        """Now that the form pre-checks, the separate box is for a domain
+        unrelated to the one being provisioned."""
+        self.assertTrue("checkDnsFromToolbar" in self.js)
+        self.assertTrue('id="dns-check"' in self.index)
 
     def test_a_failed_check_shows_a_status_rather_than_an_error(self):
         """The operator must not read a DNS problem as a provisioning problem."""
-        self.assertIn("The hosting account is unaffected", self.js)
+        self.assertIn("This does not affect provisioning", self.js)
 
     def test_an_unexpected_error_becomes_a_status_not_a_500(self):
         # Anchored to the endpoint's own body: app.py has other except
         # handlers, and scanning the whole file finds the wrong one.
-        body = self.app.split('@app.get("/api/v1/dns/check"')[1].split("\n\n\n")[0]
+        body = self.app.split('@app.get("/api/v1/dns/check"')[1].split("@app.get(", 1)[0]
         self.assertIn("except Exception as e:", body)
         self.assertIn('"status": "error"', body)
 
