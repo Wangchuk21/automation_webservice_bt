@@ -67,9 +67,8 @@ class TestDefaultsComeFromConfig(unittest.TestCase):
     def test_spec_defaults_match_config(self):
         by_name = {f["name"]: f for f in registry_field_spec()["fields"]}
         self.assertEqual(by_name["registrar"]["default"], settings.NIC_REGISTRAR)
-        self.assertEqual(by_name["billing_name"]["default"], settings.NIC_BILLING_NAME)
-        self.assertEqual(by_name["billing_email"]["default"], settings.NIC_BILLING_EMAIL)
-        self.assertEqual(by_name["billing_country"]["default"], settings.NIC_BILLING_COUNTRY)
+        self.assertEqual(by_name["tech_fax"]["default"], settings.NIC_PLACEHOLDER)
+        self.assertEqual(by_name["billing_fax"]["default"], settings.NIC_PLACEHOLDER)
 
     def test_technical_contact_is_the_domain_owner(self):
         """
@@ -87,27 +86,47 @@ class TestDefaultsComeFromConfig(unittest.TestCase):
             self.assertEqual(by_name[field]["source"], "derived", field)
             self.assertEqual(by_name[field]["derived_from"], origin, field)
 
-    def test_billing_contact_is_the_registrar(self):
+    def test_billing_contact_is_also_the_customer(self):
+        """
+        Per Bhutan Telecom's requirement, nothing about BT is published as a
+        contact: the billing block carries the customer's details too, not the
+        registrar's agent as the sampled portal records do.
+        """
         by_name = {f["name"]: f for f in registry_field_spec()["fields"]}
-        for field in ("billing_name", "billing_address", "billing_contact",
-                      "billing_fax", "billing_country", "billing_email"):
-            self.assertEqual(by_name[field]["source"], "default", field)
+        for field, origin in [("billing_name", "customername"),
+                              ("billing_address", "address"),
+                              ("billing_contact", "phone"),
+                              ("billing_country", "country"),
+                              ("billing_email", "email")]:
+            self.assertEqual(by_name[field]["source"], "derived", field)
+            self.assertEqual(by_name[field]["derived_from"], origin, field)
+
+    def test_no_bt_contact_detail_is_published(self):
+        """The registrar is the only Bhutan Telecom value on a record."""
+        defaults = [f["name"] for f in registry_field_spec()["fields"]
+                    if f["source"] == "default"]
+        self.assertEqual(sorted(defaults), ["billing_fax", "registrar", "tech_fax"])
+        src = Path(nic_client.__file__).read_text()
+        for literal in ("Bhutan Telecom Ltd", "systems@bt.bt", "DrukNet Systems",
+                        "+975-2-343434"):
+            self.assertNotIn(f'"{literal}"', src,
+                             f"{literal!r} must not be published on a customer record")
 
     def test_client_has_no_hardcoded_bt_details(self):
         """The regression this exists to prevent: values living in the code."""
         src = Path(nic_client.__file__).read_text()
-        for literal in ("DrukNet Systems", "systems@bt.bt"):
+        for literal in ("DrukNet Systems", "systems@bt.bt", "Bhutan Telecom Ltd"):
             self.assertNotIn(f'"{literal}"', src,
                              f"{literal!r} is hardcoded in nic_client; use config")
 
     def test_config_overrides_reach_the_spec(self):
-        orig = settings.NIC_BILLING_EMAIL
-        settings.NIC_BILLING_EMAIL = "changed@example.bt"
+        orig = settings.NIC_REGISTRAR
+        settings.NIC_REGISTRAR = "Changed Registrar"
         try:
             by_name = {f["name"]: f for f in registry_field_spec()["fields"]}
-            self.assertEqual(by_name["billing_email"]["default"], "changed@example.bt")
+            self.assertEqual(by_name["registrar"]["default"], "Changed Registrar")
         finally:
-            settings.NIC_BILLING_EMAIL = orig
+            settings.NIC_REGISTRAR = orig
 
     def test_source_counts_add_up(self):
         spec = registry_field_spec()

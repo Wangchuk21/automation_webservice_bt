@@ -384,19 +384,40 @@ async function loadNicSpec() {
                 <div class="nic-spec-val"><input type="text" data-nic="${esc(f.name)}"
                      value="${esc(f.default || "")}"></div>${tag}</div>`;
       }
+      // Customer fields are entered once, in the provisioning form above. The
+      // registry panel mirrors them read-only so there is a single place to
+      // type them and no chance of the two disagreeing.
       return `<div class="nic-spec-row"><label>${esc(f.label)} <code>${esc(f.name)}</code></label>
-              <div class="nic-spec-val"><input type="text" data-nic="${esc(f.name)}"
-                data-derived-from="${esc(f.derived_from || "")}" placeholder="from the form above"></div>${tag}</div>`;
+              <div class="nic-spec-val"><input type="text" class="nic-spec-mirror"
+                data-nic-mirror="${esc(f.name)}" data-derived-from="${esc(f.derived_from || "")}"
+                placeholder="filled from the form above" readonly></div>${tag}</div>`;
     }).join("");
 
     box.querySelectorAll("input[data-nic]").forEach((el) => {
       el.addEventListener("input", renderNicPayload);
       el.addEventListener("change", renderNicPayload);
     });
+    syncNicMirrors();
     renderNicPayload();
   } catch (e) {
     box.textContent = e.message;
   }
+}
+
+// The customer's form field that a mirrored registry field comes from.
+const NIC_FORM_FIELD = {
+  customername: "customer_name", address: "address", postalcode: "postal_code",
+  phone: "phone", email: "email", country: "country", reg_renewal: "renewal_date",
+};
+
+// Copy the provisioning form's values into the read-only registry mirrors.
+function syncNicMirrors() {
+  document.querySelectorAll("input[data-nic-mirror]").forEach((el) => {
+    const from = el.getAttribute("data-derived-from") || "";
+    const srcId = NIC_FORM_FIELD[from];
+    const src = srcId && document.getElementById(srcId);
+    el.value = src && src.value.trim() ? src.value.trim() : "";
+  });
 }
 
 // The payload preview: shows the operator precisely what will be POSTed.
@@ -419,25 +440,22 @@ function renderNicPayload() {
   }
   if (!ext) { const i = full.indexOf("."); if (i > 0) { base = full.slice(0, i); ext = full.slice(i); } }
 
-  // Read the customer's own fields from the provisioning form, falling back to
-  // the dashboard's own values where the operator has typed them here.
-  const fromForm = {
-    customername: "customer_name", address: "address", postalcode: "postal_code",
-    phone: "phone", email: "email", country: "country", reg_renewal: "renewal_date",
+  const formValue = (field) => {
+    const id = NIC_FORM_FIELD[field];
+    const el = id && document.getElementById(id);
+    return el && el.value.trim() ? el.value.trim() : "";
   };
+
   const payload = {};
   NIC_SPEC.fields.forEach((f) => {
-    const input = document.querySelector(`input[data-nic="${f.name}"]`);
     if (f.source === "computed") {
       payload[f.name] = f.name === "domain" ? base : ext;
       return;
     }
+    const input = document.querySelector(`input[data-nic="${f.name}"]`);
     if (input && input.value.trim()) { payload[f.name] = input.value.trim(); return; }
-    if (f.source === "customer" && fromForm[f.name]) {
-      const el = document.getElementById(fromForm[f.name]);
-      if (el && el.value.trim()) { payload[f.name] = el.value.trim(); return; }
-    }
-    if (f.source === "derived" && f.derived_from) { payload[f.name] = `(same as ${f.derived_from})`; return; }
+    if (f.source === "customer") { payload[f.name] = formValue(f.name); return; }
+    if (f.source === "derived") { payload[f.name] = formValue(f.derived_from) || f.default || ""; return; }
     if (f.source === "default") { payload[f.name] = f.default; return; }
     payload[f.name] = "";
   });
@@ -450,16 +468,18 @@ function renderNicPayload() {
     JSON.stringify(payload, null, 2) +
     (missing.length
       ? `\n\nMISSING REQUIRED: ${missing.join(", ")}  — the registry will reject this.`
-      : "\n\nAll required fields have a value.");
+      : "\n\nAll required fields have a value. Every contact on this record is the customer's.");
 }
 
 document.addEventListener("DOMContentLoaded", () => {
   loadNicSpec();
-  const d = document.getElementById("domain");
-  if (d) {
-    d.addEventListener("input", renderNicPayload);
-    d.addEventListener("blur", renderNicPayload);
-  }
+  ["domain", "customer_name", "address", "postal_code", "phone", "email", "country", "renewal_date"]
+    .forEach((id) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.addEventListener("input", () => { syncNicMirrors(); renderNicPayload(); });
+      el.addEventListener("change", () => { syncNicMirrors(); renderNicPayload(); });
+    });
 });
 
 // ========================================================

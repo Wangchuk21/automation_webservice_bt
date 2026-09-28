@@ -1184,3 +1184,9 @@ select.custom-select:focus {
 .pill-done    { background: rgba(16,185,129,.18); color: #6ee7b7; }
 .row-done td  { opacity: 0.72; }
 .row-done .muted { color: var(--text-dim); font-size: 12px; }
+.nic-spec-mirror {
+  background: rgba(255, 255, 255, 0.03) !important;
+  color: var(--text-muted) !important;
+  cursor: default;
+}
+.nic-spec-mirror::placeholder { color: var(--text-dim); font-style: italic; }

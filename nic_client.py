@@ -89,12 +89,17 @@ REGISTRY_FIELDS = (
     {"name": "tech_email", "label": "Technical email", "source": "derived",
      "derived_from": "email", "required": True},
     # Billing contact is the REGISTRAR or its agent -- Bhutan Telecom here.
-    {"name": "billing_name", "label": "Billing name", "source": "default", "required": True},
-    {"name": "billing_address", "label": "Billing address", "source": "default", "required": True},
-    {"name": "billing_contact", "label": "Billing contact", "source": "default", "required": True},
+    {"name": "billing_name", "label": "Billing name", "source": "derived",
+     "derived_from": "customername", "required": True},
+    {"name": "billing_address", "label": "Billing address", "source": "derived",
+     "derived_from": "address", "required": True},
+    {"name": "billing_contact", "label": "Billing contact", "source": "derived",
+     "derived_from": "phone", "required": True},
     {"name": "billing_fax", "label": "Billing fax", "source": "default", "required": True},
-    {"name": "billing_country", "label": "Billing country", "source": "default", "required": True},
-    {"name": "billing_email", "label": "Billing email", "source": "default", "required": True},
+    {"name": "billing_country", "label": "Billing country", "source": "derived",
+     "derived_from": "country", "required": True},
+    {"name": "billing_email", "label": "Billing email", "source": "derived",
+     "derived_from": "email", "required": True},
 )
 
 
@@ -108,17 +113,13 @@ def registry_field_spec() -> Dict[str, Any]:
     before submitting.
     """
     s = settings
+    # The registrar is the only value Bhutan Telecom supplies; every contact
+    # field on the record is the customer's own. The two fax fields have no
+    # customer equivalent collected, so the registry's placeholder is used.
     defaults = {
         "registrar": s.NIC_REGISTRAR,
-        # tech_fax is the only technical field BT supplies: the customer's fax
-        # is not collected and the registry still expects a value.
         "tech_fax": s.NIC_PLACEHOLDER,
-        "billing_name": s.NIC_BILLING_NAME,
-        "billing_address": s.NIC_BILLING_ADDRESS,
-        "billing_contact": s.NIC_BILLING_CONTACT,
-        "billing_fax": s.NIC_BILLING_FAX,
-        "billing_country": s.NIC_BILLING_COUNTRY,
-        "billing_email": s.NIC_BILLING_EMAIL,
+        "billing_fax": s.NIC_PLACEHOLDER,
     }
     counts: Dict[str, int] = {}
     for f in REGISTRY_FIELDS:
@@ -278,10 +279,10 @@ class NICClient:
                     "tech_fax": settings.NIC_PLACEHOLDER,
                     "tech_country": country or settings.NIC_DEFAULT_COUNTRY,
                     "tech_email": email,
-                    "billing_name": settings.NIC_BILLING_NAME,
-                    "billing_address": settings.NIC_BILLING_ADDRESS,
-                    "billing_contact": settings.NIC_BILLING_CONTACT,
-                    "billing_fax": settings.NIC_BILLING_FAX,
+                    "billing_name": customer_name,
+                    "billing_address": address or "Thimphu, Bhutan",
+                    "billing_contact": phone or "+975",
+                    "billing_fax": settings.NIC_PLACEHOLDER,
                     "billing_country": country or "BT",
                     "billing_email": email
                 }
@@ -330,10 +331,10 @@ class NICClient:
                     "tech_fax": settings.NIC_PLACEHOLDER,
                     "tech_country": country or settings.NIC_DEFAULT_COUNTRY,
                     "tech_email": email,
-                    "billing_name": settings.NIC_BILLING_NAME,
-                    "billing_address": settings.NIC_BILLING_ADDRESS,
-                    "billing_contact": settings.NIC_BILLING_CONTACT,
-                    "billing_fax": settings.NIC_BILLING_FAX,
+                    "billing_name": customer_name,
+                    "billing_address": address or "Thimphu, Bhutan",
+                    "billing_contact": phone or "+975",
+                    "billing_fax": settings.NIC_PLACEHOLDER,
                     "billing_country": country or "BT",
                     "billing_email": email
                 }
