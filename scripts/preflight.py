@@ -107,7 +107,7 @@ def check_env(env):
 # Docker
 # ---------------------------------------------------------------------------
 
-def check_docker():
+def check_docker(env):
     section("Docker")
     if not subprocess.run(["which", "docker"], capture_output=True).returncode == 0:
         record(FAIL, "docker", "Not installed.")
@@ -121,6 +121,24 @@ def check_docker():
                                "available. Install docker-compose-plugin.")
     else:
         record(OK, "compose", " ".join(r.stdout.split())[:60])
+
+    # Is the dashboard published beyond this host? Deliberate now, but it should
+    # be a decision somebody can see rather than a default nobody remembers.
+    compose = (ROOT / "docker-compose.yml").read_text()
+    published = re.search(r'-\s*"(\d+:\d+)"', compose)
+    if published and "127.0.0.1:" not in published.group(1):
+        if env.get("API_AUTH_TOKEN"):
+            record(WARN, "port binding",
+                   f'Published as "{published.group(1)}" -- reachable by anything on '
+                   f"this network. Protected by API_AUTH_TOKEN, sent over plain HTTP.")
+            record(WARN, "port binding",
+                   "To limit it to specific machines: sudo ufw allow from <ip> to any "
+                   "port 8000 proto tcp && sudo ufw deny 8000")
+        else:
+            record(FAIL, "port binding",
+                   f'Published as "{published.group(1)}" with NO API_AUTH_TOKEN set. '
+                   f"Anyone who can reach it could provision, suspend and delete "
+                   f"real hosting accounts.")
 
     for svc in ("bt_provisioner", "bt_suspender"):
         r = subprocess.run(["docker", "inspect", svc], capture_output=True)
@@ -244,7 +262,7 @@ def main():
     print(f"Repository: {ROOT}")
     env = read_env()
     check_env(env)
-    check_docker()
+    check_docker(env)
     check_network(env)
     check_sudo(env)
     check_host(env)

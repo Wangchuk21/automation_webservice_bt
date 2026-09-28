@@ -37,14 +37,28 @@ services:
     env_file:
       - .env
 
-    # Bound to loopback on purpose. /api/v1/accounts/create currently has NO
-    # authentication, so publishing to 0.0.0.0 would let anyone who can reach
-    # this port provision real hosting accounts on your servers and receive the
-    # credentials. Use an SSH tunnel to reach it remotely:
-    #     ssh -L 8000:127.0.0.1:8000 user@this-host
-    # Once API_AUTH_TOKEN is enforced in app.py, change this to "8000:8000".
+    # Published on the host's LAN address so staff can reach the dashboard
+    # directly at http://<host>:8000 instead of opening an SSH tunnel.
+    #
+    # This was previously bound to 127.0.0.1, when the only way in was a
+    # tunnel. The host is on a private RFC1918 address, so the port is not
+    # reachable from the internet -- the exposure is limited to the local
+    # network, which is the intended audience for an internal tool.
+    #
+    # Two consequences to be aware of, both accepted deliberately:
+    #   * the service is plain HTTP, so X-API-Token crosses the LAN in clear
+    #     text and is readable by anything that can see that traffic;
+    #   * anything on the LAN can reach the port, and the token is the only
+    #     thing protecting endpoints that suspend or permanently delete hosting
+    #     accounts and destroy domain registrations.
+    #
+    # To narrow that, restrict the port to specific source machines:
+    #     sudo ufw allow from <employee-ip> to any port 8000 proto tcp
+    #     sudo ufw deny 8000
+    # Or revert to loopback-only and use a tunnel:
+    #     change this back to "127.0.0.1:8000:8000"
     ports:
-      - "127.0.0.1:8000:8000"
+      - "8000:8000"
 
     # SSH private key for the cPanel / DirectAdmin servers, mounted read-only.
     # config.py calls os.path.expanduser() on CPANEL_SSH_KEY_PATH, and the
