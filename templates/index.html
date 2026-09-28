@@ -344,9 +344,39 @@
 
           <!-- nic.bt.bt registry outcome (only shown when the option was ticked) -->
           <div id="res-nic-status" class="res-nic-status hidden"></div>
+
+          <!-- Whether the domain's DNS actually points at the server just used.
+               A created account and a reachable domain are different things, and
+               the credentials above look equally convincing either way. -->
+          <div id="res-dns-status" class="res-dns-status hidden"></div>
         </div>
       </section>
     </main>
+
+    <!-- Standalone DNS check: for an existing account, or when a customer says
+         their site is down and the account is known to be correct. -->
+    <section class="card docs-card" id="dns-check">
+      <h3 class="docs-title">🌍 DNS Mapping Check</h3>
+      <p class="docs-desc">
+        Resolves the domain and compares it with the server that hosts it. ICMP is
+        often filtered, so this reads the DNS record instead &mdash; which is what
+        actually decides whether a customer can reach the site.
+      </p>
+      <div class="docs-grid">
+        <div class="docs-box">
+          <div class="docs-box-title">Check a domain</div>
+          <div class="dns-check-row">
+            <input type="text" id="dns_domain" placeholder="e.g. customer.bt" autocomplete="off">
+            <select id="dns_panel">
+              <option value="cpanel">cPanel</option>
+              <option value="directadmin">DirectAdmin</option>
+            </select>
+            <button class="btn btn-secondary btn-sm" id="btn-dns-check">Check</button>
+          </div>
+          <div id="dns-result" class="dns-result"></div>
+        </div>
+      </div>
+    </section>
 
     <!-- Service Surrender (termination) -->
     <section class="card form-card surrender-card" id="surrender">

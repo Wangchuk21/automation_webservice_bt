@@ -29,6 +29,7 @@ from nic_client import (
     NICClient, REGISTRY_FIELDS, registry_field_spec, split_domain_ext,
 )
 from bscs_client import BSCSClient, BSCSError
+from dns_check import check_domain
 from suspension import (
     SKIP_ALREADY_BILLING, SKIP_NO_MATCH, SKIP_OTHER_REASON, SUSPEND, latest_report,
 )
@@ -440,7 +441,13 @@ async def create_account(payload: AccountCreateRequest):
             "nameservers": result.nameservers,
             "handover_text": result.handover_text,
             "email_status": email_status,
-            "nic_status": nic_status
+            "nic_status": nic_status,
+            # The account existing is not the same as the domain being
+            # reachable, and the handover kit is where an operator would
+            # otherwise assume it is. A dry run is not reported: no account was
+            # created, so a DNS result would say nothing about the outcome.
+            "dns": (None if payload.dry_run
+                    else check_domain(result.domain, panel=payload.panel)),
         }
     }
 
@@ -881,6 +888,28 @@ async def nic_extensions():
                    "Could not read the extension list from nic.bt.bt. "
                    "The extension will be derived from the domain name instead.",
     }
+
+
+@app.get("/api/v1/dns/check", dependencies=[Depends(require_api_token)])
+async def dns_check(
+    domain: str,
+    panel: str = "cpanel",
+    probe: bool = True,
+):
+    """
+    Whether a domain's DNS points at the server that hosts it.
+
+    Reported after a provisioning because a created account and a reachable
+    domain are different things: the account can be correct while the A record
+    still points nowhere, and the operator has no other way to see that.
+
+    Resolves DNS rather than sending ICMP, which is commonly filtered and would
+    report "unreachable" for a domain that is in fact mapped correctly.
+    """
+    domain = (domain or "").strip()
+    if not domain:
+        raise HTTPException(status_code=422, detail="A domain is required.")
+    return check_domain(domain, panel=panel, probe=probe)
 
 
 @app.get("/api/v1/nic/field-spec", dependencies=[Depends(require_api_token)])

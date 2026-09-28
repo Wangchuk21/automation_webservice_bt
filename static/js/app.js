@@ -617,6 +617,15 @@ document.addEventListener("DOMContentLoaded", () => {
   }
   updateAuthBanner();
 
+  const dnsBtn = document.getElementById("btn-dns-check");
+  if (dnsBtn) dnsBtn.addEventListener("click", checkDnsFromToolbar);
+  const dnsInput = document.getElementById("dns_domain");
+  if (dnsInput) {
+    dnsInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); checkDnsFromToolbar(); }
+    });
+  }
+
   // The nic.bt.bt toggle is wired once, in the registry form section above,
   // which also loads the field list. Wiring it again here would hide the block
   // independently of the load and call a function that no longer exists.
@@ -701,6 +710,80 @@ function renderNicStatus(nic) {
 
   if (!ok && !skipped) {
     showToast("Hosting account created, but the nic.bt.bt update failed. Check the panel.", "error");
+  }
+}
+
+// ========================================================
+// DNS MAPPING CHECK
+// An account existing is not the same as a domain reaching it. The credentials
+// in the handover kit look identical either way, so the DNS result is shown
+// next to them rather than left to be assumed.
+// ========================================================
+
+const DNS_LABEL = {
+  mapped: "Points to this server",
+  not_mapped: "Points somewhere else",
+  unresolved: "Does not resolve",
+};
+
+function dnsBadge(d) {
+  if (!d) return "";
+  const icon = d.status === "mapped" ? "✓"
+    : (d.status === "unresolved" ? "?" : "⚠");
+  return `${icon} ${DNS_LABEL[d.status] || d.status}`;
+}
+
+// Render a DNS result. `compact` is the handover-kit line; the standalone box
+// shows the addresses too, since that is where someone came to be told.
+function renderDns(box, d, compact) {
+  if (!box) return;
+  if (!d) { box.classList.add("hidden"); box.innerHTML = ""; return; }
+  const cls = d.status === "mapped" ? "dns-ok"
+    : (d.status === "unresolved" ? "dns-warn" : "dns-fail");
+  box.className = `${box.id === "res-dns-status" ? "res-dns-status" : "dns-result"} ${cls}`;
+  box.classList.remove("hidden");
+  box.innerHTML = `<div class="dns-head">
+      <span class="dns-badge">${esc(dnsBadge(d))}</span>
+      <code>${esc(d.domain)}</code>
+    </div>
+    <p>${esc(d.message || "")}</p>` +
+    (compact ? "" : `<div class="dns-detail">
+        <span>resolves to <code>${esc((d.resolved || []).join(", ") || "nothing")}</code></span>
+        <span>this server is <code>${esc((d.ours || []).join(", ") || "no address configured")}</code></span>
+        ${d.web_answers === true ? '<span class="dns-port">port 80 answers</span>'
+          : (d.web_answers === false ? '<span class="dns-port-off">port 80 did not answer</span>' : "")}
+      </div>`);
+}
+
+async function runDnsCheck(domain, panel) {
+  const res = await fetch(
+    `/api/v1/dns/check?domain=${encodeURIComponent(domain)}&panel=${encodeURIComponent(panel)}`,
+    { headers: apiHeaders() });
+  const data = await res.json();
+  if (!res.ok) throw new Error((data && data.detail) || `HTTP ${res.status}`);
+  return data;
+}
+
+async function checkDnsFromToolbar() {
+  const input = document.getElementById("dns_domain");
+  const panel = document.getElementById("dns_panel");
+  const out = document.getElementById("dns-result");
+  const btn = document.getElementById("btn-dns-check");
+  if (!input || !out) return;
+  const domain = input.value.trim();
+  if (!domain) { showToast("Enter a domain to check.", "error"); return; }
+
+  btn.disabled = true;
+  out.classList.remove("hidden");
+  out.className = "dns-result";
+  out.innerHTML = '<span class="form-hint">Resolving&hellip;</span>';
+  try {
+    renderDns(out, await runDnsCheck(domain, panel.value), false);
+  } catch (e) {
+    out.className = "dns-result dns-fail";
+    out.innerHTML = `<p>${esc(e.message)}</p>`;
+  } finally {
+    btn.disabled = false;
   }
 }
 
@@ -907,6 +990,7 @@ async function handleProvisionSubmit(e) {
     latestAccountData = result.data;
     renderResult(result.data);
     renderNicStatus(result.data.nic_status);
+    renderDns(document.getElementById("res-dns-status"), result.data.dns, true);
     showToast(`Account for ${result.data.domain} successfully provisioned!`, "success");
 
   } catch (error) {

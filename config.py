@@ -138,6 +138,12 @@ class Config:
     # Domains on verizonenterprise.bt, MarkMonitor on the .com records.
     # Those records put the agent there; this system sends the customer
     # instead, per Bhutan Telecom's own requirement.
+    # Extra addresses that count as "ours" when checking whether a domain's DNS
+    # points at us. A shared-hosting address is not always the control panel's
+    # own address, so customer domains may live on an IP that appears nowhere in
+    # the panel settings. Comma separated.
+    HOSTING_SERVER_IPS: str = os.getenv("HOSTING_SERVER_IPS", "")
+
     NIC_REGISTRAR: str = os.getenv("NIC_REGISTRAR", "DrukNet")
     # Placeholder used where the registry marks a field required but there is
     # genuinely no value. Real records on the registry use "-" for these.

@@ -1414,3 +1414,72 @@ select.custom-select:focus {
   font-size: 12px;
   line-height: 1.5;
 }
+
+/* ========================================================
+   DNS MAPPING CHECK
+   A created account and a domain that reaches it are
+   different things; the credentials look equally convincing
+   either way, so the result sits beside them.
+   ======================================================== */
+
+.res-dns-status {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-color);
+  background: var(--bg-input);
+  font-size: 12px;
+  line-height: 1.55;
+}
+.dns-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
+.dns-head code { font-family: var(--font-mono); color: var(--text-muted); }
+.dns-badge {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-radius: 999px;
+  padding: 2px 9px;
+}
+.res-dns-status p, .dns-result p { margin: 0; color: var(--text-muted); }
+
+.dns-ok { border-color: rgba(16, 185, 129, 0.45); background: rgba(16, 185, 129, 0.07); }
+.dns-ok .dns-badge { color: #6ee7b7; background: rgba(16, 185, 129, 0.16); }
+.dns-warn { border-color: rgba(251, 191, 36, 0.45); background: rgba(251, 191, 36, 0.07); }
+.dns-warn .dns-badge { color: #fcd34d; background: rgba(251, 191, 36, 0.16); }
+.dns-fail { border-color: rgba(244, 63, 94, 0.45); background: rgba(244, 63, 94, 0.07); }
+.dns-fail .dns-badge { color: #fda4af; background: rgba(244, 63, 94, 0.16); }
+
+.dns-check-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+.dns-check-row input, .dns-check-row select {
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-color);
+  background: var(--bg-input);
+  color: var(--text-main);
+  font-size: 13px;
+}
+.dns-check-row input { flex: 1; min-width: 180px; font-family: var(--font-mono); }
+
+.dns-result {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-color);
+  background: var(--bg-input);
+  font-size: 12px;
+  line-height: 1.55;
+}
+.dns-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-color);
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.dns-detail code { font-family: var(--font-mono); color: var(--text-dim); }
+.dns-port { color: #6ee7b7; }
+.dns-port-off { color: #fcd34d; }
