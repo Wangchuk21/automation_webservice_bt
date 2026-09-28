@@ -246,6 +246,24 @@ async def serve_dashboard(request: Request):
     )
 
 
+@app.get("/registry-fields", response_class=HTMLResponse)
+async def serve_registry_fields(request: Request):
+    """
+    Reference page for the 23 fields nic.bt.bt requires.
+
+    This was a read-only mirror of the provisioning form's own fields, sitting
+    directly beneath them. It duplicated every value the operator had just
+    typed, and it buried the one useful thing it offered -- the full list of
+    registry requirements -- inside the middle of the form they were filling in.
+
+    It is a separate page now. The provisioning form is the single place
+    registry details are captured; this page only shows what is required and
+    where each value comes from, and resolves the two computed fields against
+    any domain typed into it.
+    """
+    return templates.TemplateResponse(request, "registry_fields.html", {})
+
+
 @app.get("/api/v1/health")
 async def health_check():
     return {"status": "ok", "service": "automation_webservice_bt"}

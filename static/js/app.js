@@ -342,84 +342,6 @@ document.addEventListener("DOMContentLoaded", () => {
   loadSuspensionReport();
 });
 
-// ========================================================
-// nic.bt.bt REGISTRY FIELD SPEC
-// Renders the registry's required fields from the same list the client
-// submits, so nothing is hidden in code.
-// ========================================================
-
-let NIC_SPEC = null;
-
-const SOURCE_LABEL = {
-  customer: "from customer",
-  derived: "copied from above",
-  default: "Bhutan Telecom default",
-  computed: "from the domain",
-};
-
-async function loadNicSpec() {
-  const box = document.getElementById("nic_spec_fields");
-  if (!box) return;
-  try {
-    const res = await fetch("/api/v1/nic/field-spec", { headers: apiHeaders() });
-    if (!res.ok) {
-      box.textContent = `Unavailable (HTTP ${res.ok ? "" : res.status}).`;
-      return;
-    }
-    const spec = await res.json();
-    NIC_SPEC = spec;
-    const c = spec.source_counts || {};
-    document.getElementById("nic_spec_count").textContent =
-      `${spec.required_count} fields · ${c.customer || 0} from the customer, ` +
-      `${c.default || 0} BT defaults, ${c.derived || 0} copied, ${c.computed || 0} computed`;
-
-    box.innerHTML = spec.fields.map((f) => {
-      const tag = `<span class="tag tag-${f.source}">${esc(SOURCE_LABEL[f.source] || f.source)}</span>`;
-      if (f.source === "computed") {
-        return `<div class="nic-spec-row"><label>${esc(f.label)} <code>${esc(f.name)}</code></label>
-                <div class="nic-spec-val nic-spec-computed" data-nic="auto">—</div>${tag}</div>`;
-      }
-      if (f.source === "default") {
-        return `<div class="nic-spec-row"><label>${esc(f.label)} <code>${esc(f.name)}</code></label>
-                <div class="nic-spec-val"><input type="text" data-nic="${esc(f.name)}"
-                     value="${esc(f.default || "")}"></div>${tag}</div>`;
-      }
-      // Customer fields are entered once, in the provisioning form above. The
-      // registry panel mirrors them read-only so there is a single place to
-      // type them and no chance of the two disagreeing.
-      return `<div class="nic-spec-row"><label>${esc(f.label)} <code>${esc(f.name)}</code></label>
-              <div class="nic-spec-val"><input type="text" class="nic-spec-mirror"
-                data-nic-mirror="${esc(f.name)}" data-derived-from="${esc(f.derived_from || "")}"
-                placeholder="filled from the form above" readonly></div>${tag}</div>`;
-    }).join("");
-
-    box.querySelectorAll("input[data-nic]").forEach((el) => {
-      el.addEventListener("input", renderNicPayload);
-      el.addEventListener("change", renderNicPayload);
-    });
-    syncNicMirrors();
-    renderNicPayload();
-  } catch (e) {
-    box.textContent = e.message;
-  }
-}
-
-// The customer's form field that a mirrored registry field comes from.
-const NIC_FORM_FIELD = {
-  customername: "customer_name", address: "address", postalcode: "postal_code",
-  phone: "phone", email: "email", country: "country", reg_renewal: "renewal_date",
-};
-
-// Copy the provisioning form's values into the read-only registry mirrors.
-function syncNicMirrors() {
-  document.querySelectorAll("input[data-nic-mirror]").forEach((el) => {
-    const from = el.getAttribute("data-derived-from") || "";
-    const srcId = NIC_FORM_FIELD[from];
-    const src = srcId && document.getElementById(srcId);
-    el.value = src && src.value.trim() ? src.value.trim() : "";
-  });
-}
-
 // The extensions nic.bt.bt itself offers, so the selector can never drift from
 // what the registry accepts. Loaded on first use rather than at page load,
 // because reading it means the server authenticating against the portal.
@@ -447,7 +369,6 @@ async function loadNicExtensions() {
     sel.innerHTML = opts.map((e) => `<option value="${esc(e)}">${esc(e)}</option>`).join("");
     sel.disabled = false;
     syncNicExtFromDomain();
-    renderNicPayload();
   } catch (e) {
     unavailable();
   }
@@ -482,75 +403,18 @@ function syncNicExtFromDomain() {
   }
 }
 
-// The payload preview: shows the operator precisely what will be POSTed.
-function renderNicPayload() {
-  const pre = document.getElementById("nic_spec_payload");
-  if (!pre || !NIC_SPEC) return;
-
-  const domainInput = document.getElementById("domain");
-  const full = (domainInput && domainInput.value.trim().toLowerCase()) || "";
-  if (!full) {
-    pre.textContent = "Enter a domain to preview the payload.";
-    return;
-  }
-
-  // Split the extension off, honouring an explicit choice from the selector.
-  const extSel = document.getElementById("ext");
-  const chosen = (extSel && extSel.value || "").trim();
-  let [base, ext] = splitDomainExt(full, NIC_EXTENSIONS || []);
-  if (chosen) {
-    ext = chosen;
-    if (base.toLowerCase().endsWith(chosen.toLowerCase())) {
-      base = base.slice(0, base.length - chosen.length);
-    }
-  }
-
-  const formValue = (field) => {
-    const id = NIC_FORM_FIELD[field];
-    const el = id && document.getElementById(id);
-    return el && el.value.trim() ? el.value.trim() : "";
-  };
-
-  const payload = {};
-  NIC_SPEC.fields.forEach((f) => {
-    if (f.source === "computed") {
-      payload[f.name] = f.name === "domain" ? base : ext;
-      return;
-    }
-    const input = document.querySelector(`input[data-nic="${f.name}"]`);
-    if (input && input.value.trim()) { payload[f.name] = input.value.trim(); return; }
-    if (f.source === "customer") { payload[f.name] = formValue(f.name); return; }
-    if (f.source === "derived") { payload[f.name] = formValue(f.derived_from) || f.default || ""; return; }
-    if (f.source === "default") { payload[f.name] = f.default; return; }
-    payload[f.name] = "";
-  });
-
-  const missing = NIC_SPEC.fields
-    .filter((f) => f.required && !payload[f.name])
-    .map((f) => f.name);
-
-  pre.textContent =
-    JSON.stringify(payload, null, 2) +
-    (missing.length
-      ? `\n\nMISSING REQUIRED: ${missing.join(", ")}  — the registry will reject this.`
-      : "\n\nAll required fields have a value. Every contact on this record is the customer's.");
-}
-
 document.addEventListener("DOMContentLoaded", () => {
-  loadNicSpec();
-  ["domain", "customer_name", "address", "postal_code", "phone", "email", "country", "renewal_date"]
-    .forEach((id) => {
-      const el = document.getElementById(id);
-      if (!el) return;
-      el.addEventListener("input", () => { syncNicMirrors(); syncNicExtFromDomain(); renderNicPayload(); });
-      el.addEventListener("change", () => { syncNicMirrors(); syncNicExtFromDomain(); renderNicPayload(); });
-    });
+  // Only the extension selector needs wiring: the rest of the registry fields
+  // are ordinary form inputs submitted with the rest of the form.
+  const domain = document.getElementById("domain");
+  if (domain) {
+    domain.addEventListener("input", syncNicExtFromDomain);
+    domain.addEventListener("change", syncNicExtFromDomain);
+  }
   // Choosing an extension by hand overrides what the domain implies, so the
   // domain must not then pull the selector back.
   const extSel = document.getElementById("ext");
-  if (extSel) {
-    extSel.addEventListener("change", () => { nicExtTouched = true; renderNicPayload(); });
-  }
+  if (extSel) extSel.addEventListener("change", () => { nicExtTouched = true; });
 });
 
 // ========================================================

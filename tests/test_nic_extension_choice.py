@@ -173,9 +173,10 @@ class TestDashboardAgreesWithTheServer(unittest.TestCase):
         self.assertIn(r"/\.+$/", body)
         self.assertIn('replace(', body)
 
-    def test_the_preview_prefers_an_explicitly_chosen_extension(self):
+    def test_a_manual_choice_is_not_overridden_by_the_domain(self):
+        """syncNicExtFromDomain must respect the operator's deliberate pick."""
         self.assertIn("nicExtTouched", self.js)
-        self.assertIn("const chosen", self.js)
+        self.assertIn("if (!sel || sel.disabled || nicExtTouched) return;", self.js)
 
 
 class TestExtensionsEndpoint(unittest.TestCase):
@@ -206,3 +207,78 @@ class TestExtensionsEndpoint(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestRegistryFieldsAreNotDuplicated(unittest.TestCase):
+    """
+    The provisioning form once carried a panel listing all 23 registry fields
+    as a read-only mirror of the fields directly above it. Every value was
+    therefore shown twice, and the operator had two places to look for the same
+    thing. The fields above are the only place registry details are captured;
+    the full list is a reference on its own page.
+
+    These hold that line: the form captures, the page explains, and neither
+    re-implements the other.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        root = Path(__file__).resolve().parent.parent
+        cls.index = (root / "templates" / "index.html").read_text()
+        cls.ref = (root / "templates" / "registry_fields.html").read_text()
+        cls.js = (root / "static" / "js" / "app.js").read_text()
+
+    def test_the_form_no_longer_renders_the_field_list(self):
+        for gone in ("nic_spec_fields", "nic_spec_payload", "id=\"nic_spec\""):
+            self.assertNotIn(gone, self.index,
+                             f"{gone} puts the field list back inside the form")
+
+    def test_the_form_links_to_the_reference_page(self):
+        self.assertIn('href="/registry-fields"', self.index)
+
+    def test_the_reference_page_does_not_re_capture_the_fields(self):
+        """It must not offer inputs for the customer's details, or the
+        duplication returns in the other direction."""
+        for field in ('id="customer_name"', 'id="phone"', 'id="address"',
+                      'id="postal_code"', 'id="renewal_date"'):
+            self.assertNotIn(field, self.ref,
+                             f"{field} would capture the value a second time")
+
+    def test_the_reference_page_reads_the_same_spec_and_extension_sources(self):
+        self.assertIn("/api/v1/nic/field-spec", self.ref)
+        self.assertIn("/api/v1/nic/extensions", self.ref,
+                      "the extension list must come from the registry, not a copy")
+
+    def test_dead_javascript_is_gone(self):
+        """The removed panel's renderers had no elements left to bind to."""
+        for gone in ("renderNicPayload", "syncNicMirrors", "loadNicSpec", "NIC_SPEC"):
+            self.assertNotIn(gone, self.js, f"{gone} is dead code now")
+
+    def test_the_extension_selector_still_works(self):
+        """Removing the mirror must not take the selector with it."""
+        for kept in ("loadNicExtensions", "splitDomainExt", "syncNicExtFromDomain",
+                     "id=\"ext\"", "ext: nicExt || null"):
+            self.assertTrue(kept in self.js or kept in self.index,
+                            f"{kept} disappeared")
+
+
+class TestRegistryFieldsPageIsServed(unittest.TestCase):
+    def setUp(self):
+        app_module.app.dependency_overrides[app_module.require_api_token] = lambda: None
+        self.client = TestClient(app_module.app)
+
+    def tearDown(self):
+        app_module.app.dependency_overrides = {}
+
+    def test_the_page_loads(self):
+        r = self.client.get("/registry-fields")
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("text/html", r.headers["content-type"])
+
+    def test_it_reads_both_sources_the_client_does(self):
+        body = self.client.get("/registry-fields").text
+        self.assertIn("/api/v1/nic/field-spec", body)
+        self.assertIn("/api/v1/nic/extensions", body)
+
+    def test_it_offers_a_way_back(self):
+        self.assertIn('href="/"', self.client.get("/registry-fields").text)

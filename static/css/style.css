@@ -1190,3 +1190,129 @@ select.custom-select:focus {
   cursor: default;
 }
 .nic-spec-mirror::placeholder { color: var(--text-dim); font-style: italic; }
+
+/* ========================================================
+   REGISTRY FIELD REFERENCE PAGE
+   Replaces the read-only mirror of the provisioning form's
+   fields that used to sit inside the form itself. The form is
+   the only place registry details are captured; this page only
+   shows what is required and where each value comes from.
+   ======================================================== */
+
+/* Link standing in for the removed panel, on the provisioning form. */
+.nic-spec-link {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 18px;
+  padding: 12px 14px;
+  border: 1px dashed var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  color: var(--text-main);
+  text-decoration: none;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.nic-spec-link:hover {
+  border-color: var(--primary);
+  background: var(--bg-card);
+}
+.nic-spec-link-icon { font-size: 18px; line-height: 1; }
+.nic-spec-link strong { display: block; font-size: 13px; font-weight: 600; }
+.nic-spec-link em {
+  display: block;
+  font-style: normal;
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+.nic-spec-link-arrow {
+  margin-left: auto;
+  font-size: 22px;
+  line-height: 1;
+  color: var(--primary);
+}
+
+.rf-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  flex-wrap: wrap;
+  margin-bottom: 22px;
+}
+.page-title {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text-main);
+  margin: 0;
+}
+.page-sub {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin: 6px 0 0;
+  max-width: 70ch;
+  line-height: 1.5;
+}
+
+.rf-toolbar {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 20px;
+  flex-wrap: wrap;
+  padding: 16px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  margin-bottom: 16px;
+}
+.rf-domain { min-width: 260px; flex: 1; max-width: 360px; }
+.rf-domain input {
+  width: 100%;
+  padding: 9px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-color);
+  background: var(--bg-input);
+  color: var(--text-main);
+  font-size: 13px;
+  font-family: var(--font-mono);
+}
+.rf-domain .form-hint-inline {
+  font-weight: 400;
+  color: var(--text-dim);
+  margin-left: 6px;
+  font-size: 11px;
+}
+.rf-counts {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  padding-bottom: 9px;
+}
+
+.rf-note {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-muted);
+  background: var(--bg-input);
+  border-left: 3px solid var(--primary);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  margin: 0 0 16px;
+}
+.rf-note strong { color: var(--text-main); }
+.rf-note a { color: var(--primary); }
+
+.rf-legend { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+
+/* All 23 fields visible at once: the point of the page is that none of them
+   is hidden, so the scrolling box the in-form panel used is not wanted. */
+#rf_fields { max-height: none; overflow: visible; }
+.rf-value { font-family: var(--font-mono); font-size: 12px; color: var(--text-main); }
+.rf-note-sm {
+  display: block;
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-top: 2px;
+}

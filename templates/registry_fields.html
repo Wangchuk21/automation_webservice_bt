@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>nic.bt.bt registry fields &middot; BT Hosting Automation</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body class="dark-theme">
+  <div class="ambient-glow glow-1"></div>
+  <div class="ambient-glow glow-2"></div>
+  <div class="ambient-glow glow-3"></div>
+  <div class="bg-grid-pattern"></div>
+
+  <div class="app-wrapper">
+    <div class="rf-header">
+      <div>
+        <h1 class="page-title">Registry fields required by nic.bt.bt</h1>
+        <p class="page-sub">
+          Reference for all <span id="rf_required">&hellip;</span> fields the registry's
+          domain form requires, and where each value comes from.
+        </p>
+      </div>
+      <a class="btn btn-secondary" href="/">&larr; Back to provisioning</a>
+    </div>
+
+  <!-- The extension list is not repeated here: nic.bt.bt's own dropdown is the
+       authority, so it is read from the portal and the same list appears both
+       on the provisioning form and below. -->
+  <div class="rf-toolbar">
+    <div class="rf-domain">
+      <label class="form-label" for="rf_domain">Domain <span class="form-hint-inline">optional &mdash; resolves the two computed fields</span></label>
+      <input type="text" id="rf_domain" placeholder="e.g. wank.com.bt">
+    </div>
+    <div class="rf-counts" id="rf_counts">Loading&hellip;</div>
+  </div>
+
+  <p class="rf-note">
+    <strong>These fields are not filled in here.</strong> They are captured once, on the
+    <a href="/">provisioning form</a>, and submitted from there. This page exists so the
+    registry's full list stays visible &mdash; ten of these fields were previously hidden
+    inside the client with no way to see or change them.
+  </p>
+
+  <div class="rf-legend">
+    <span class="tag tag-customer">from customer</span>
+    <span class="tag tag-derived">copied from another field</span>
+    <span class="tag tag-default">Bhutan Telecom default</span>
+    <span class="tag tag-computed">computed from the domain</span>
+  </div>
+
+  <div class="nic-spec-grid" id="rf_fields">Loading&hellip;</div>
+
+  <script>
+    const SOURCE_LABEL = {
+      customer: "from customer",
+      derived: "copied from another field",
+      default: "Bhutan Telecom default",
+      computed: "computed from the domain",
+    };
+    const esc = (s) => String(s == null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+    let SPEC = null;
+    let EXTENSIONS = [];
+
+    // The registry's own dropdown, the same source the provisioning form uses.
+    async function loadExtensions() {
+      try {
+        const res = await fetch("/api/v1/nic/extensions");
+        const data = res.ok ? await res.json() : {};
+        EXTENSIONS = data.extensions || [];
+      } catch (e) { EXTENSIONS = []; }
+    }
+
+    // Longest match first, so wank.com.bt resolves to .com.bt rather than .bt.
+    function splitDomainExt(domain) {
+      const full = (domain || "").trim().toLowerCase().replace(/\.+$/, "");
+      const known = EXTENSIONS.slice().sort((a, b) => b.length - a.length);
+      for (const e of known) {
+        if (full.length > e.length && full.endsWith(e)) {
+          return [full.slice(0, -e.length), e];
+        }
+      }
+      const i = full.indexOf(".");
+      if (i > 0) return [full.slice(0, i), full.slice(i)];
+      return [full, ""];
+    }
+
+    function render() {
+      const box = document.getElementById("rf_fields");
+      if (!SPEC) return;
+      const [base, ext] = splitDomainExt(document.getElementById("rf_domain").value);
+
+      box.innerHTML = SPEC.fields.map((f) => {
+        const tag = `<span class="tag tag-${esc(f.source)}">${esc(SOURCE_LABEL[f.source] || f.source)}</span>`;
+        let value, note;
+        if (f.name === "domain") {
+          value = base || "—";
+          note = base ? "" : "type a domain above";
+        } else if (f.name === "ext") {
+          value = ext || "—";
+          note = EXTENSIONS.length
+            ? `one of ${EXTENSIONS.length} the registry offers`
+            : "extension list unavailable";
+        } else if (f.source === "default") {
+          value = f.default;
+          note = "sent on every registration";
+        } else if (f.source === "derived") {
+          value = f.derived_from ? `copied from ${f.derived_from}` : "—";
+          note = "";
+        } else {
+          value = "—";
+          note = "entered on the provisioning form";
+        }
+        return `<div class="nic-spec-row rf-row">
+                  <label>${esc(f.label)} <code>${esc(f.name)}</code></label>
+                  <div class="nic-spec-val"><span class="rf-value">${esc(value)}</span>
+                    ${note ? `<span class="rf-note-sm">${esc(note)}</span>` : ""}
+                  </div>
+                  ${tag}
+                </div>`;
+      }).join("");
+    }
+
+    async function init() {
+      const res = await fetch("/api/v1/nic/field-spec");
+      if (!res.ok) {
+        document.getElementById("rf_fields").textContent = `Unavailable (HTTP ${res.status}).`;
+        return;
+      }
+      SPEC = await res.json();
+      await loadExtensions();
+      const c = SPEC.source_counts || {};
+      document.getElementById("rf_required").textContent = SPEC.required_count;
+      document.getElementById("rf_counts").innerHTML =
+        `${c.customer || 0} from the customer &middot; ${c.derived || 0} copied &middot; ` +
+        `${c.default || 0} BT defaults &middot; ${c.computed || 0} computed`;
+      render();
+    }
+
+    document.addEventListener("DOMContentLoaded", () => {
+      init();
+      const domain = document.getElementById("rf_domain");
+      domain.addEventListener("input", render);
+    });
+  </script>
+</div>
+</body>
+</html>
