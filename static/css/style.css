@@ -1483,3 +1483,13 @@ select.custom-select:focus {
 .dns-detail code { font-family: var(--font-mono); color: var(--text-dim); }
 .dns-port { color: #6ee7b7; }
 .dns-port-off { color: #fcd34d; }
+
+/* Post-create setup steps (cPanel IPv6, DirectAdmin SFTP access). */
+.res-dns-status .pc-ok { color: #6ee7b7; margin: 4px 0 0; }
+.res-dns-status .pc-bad { color: #fcd34d; margin: 4px 0 0; }
+.res-dns-status .pc-note {
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--text-dim);
+  line-height: 1.5;
+}

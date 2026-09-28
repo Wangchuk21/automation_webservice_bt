@@ -72,6 +72,12 @@ class ServerConfig:
         self.ssh_port = int(os.getenv(f"{prefix}_SSH_PORT", "22"))
         self.ssh_user = os.getenv(f"{prefix}_SSH_USER", "root")
         self.ssh_password = os.getenv(f"{prefix}_SSH_PASSWORD", "")
+
+        # Password for `sudo` on this server. Both servers give the automation
+        # account full root but require a password, and on both that password is
+        # the same as the SSH one. Set {prefix}_SUDO_PASSWORD separately if that
+        # ever stops being true, so this does not become a hidden assumption.
+        self.sudo_password = os.getenv(f"{prefix}_SUDO_PASSWORD", self.ssh_password)
         self.ssh_key_path = os.getenv(f"{prefix}_SSH_KEY_PATH", "")
         
         # API settings
@@ -143,6 +149,11 @@ class Config:
     # own address, so customer domains may live on an IP that appears nowhere in
     # the panel settings. Comma separated.
     HOSTING_SERVER_IPS: str = os.getenv("HOSTING_SERVER_IPS", "")
+
+    # The cPanel IPv6 range new accounts are given an address from. Read from
+    # the server with `whmapi1 ipv6_range_list`; the name here is the "name"
+    # field of one of its entries, not the CIDR.
+    CPANEL_IPV6_RANGE: str = os.getenv("CPANEL_IPV6_RANGE", "SHARED")
 
     NIC_REGISTRAR: str = os.getenv("NIC_REGISTRAR", "DrukNet")
     # Placeholder used where the registry marks a field required but there is

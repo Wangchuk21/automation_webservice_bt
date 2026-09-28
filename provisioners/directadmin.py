@@ -5,7 +5,9 @@ import shlex
 from typing import Optional, Dict, Any
 import requests
 
+from config import settings
 from .base import (
+    USERNAME_RE,
     BaseProvisioner,
     ProvisionerResult,
     ValidationError,
@@ -373,6 +375,124 @@ class DirectAdminProvisioner(BaseProvisioner):
                                "The suspended parameter may not be what this version expects."}
         return {"success": True,
                 "message": f"Suspended '{username}' on {self.host}. Reason: {reason}"}
+
+    def allow_sftp_user(self, username: str) -> Dict[str, Any]:
+        """
+        Add a new account to sshd_config's AllowUsers so SFTP works for them.
+
+        This server restricts SSH with three AllowUsers lines in
+        /etc/ssh/sshd_config: root, a short staff list, and the customer
+        accounts. A new DirectAdmin user is therefore refused by sshd until
+        their name is added, and the customer is told their SFTP details and
+        then cannot use them.
+
+        The edit is deliberately cautious, because this file is the only thing
+        between the internet and every customer's file transfer:
+
+          * a timestamped backup is taken before anything changes
+          * `sshd -t` validates the result and, on failure, the backup is
+            restored and nothing is reloaded
+          * `systemctl reload` is used, not restart, so live sessions survive
+          * an account already listed is a no-op, not a second entry
+
+        Returns a result rather than raising: this is a post-create step, and a
+        failure here must not undo or fail an account that was created fine.
+        """
+        username = (username or "").strip().lower()
+        if not username:
+            return {"success": False, "step": "sftp_access",
+                    "message": "No username given."}
+
+        # Refuse anything that is not a plain account name before it reaches the
+        # file. The shell quoting stops a name being executed as a command, but
+        # an AllowUsers entry is a whitespace-separated list, so a name with
+        # spaces in it is written as several separate entries -- which is how a
+        # test string of "bad name; rm -rf /" ended up on the live server as five
+        # real entries while this method reported success.
+        if not USERNAME_RE.match(username):
+            return {"success": False, "step": "sftp_access",
+                    "message": f"'{username}' is not a valid account name, so "
+                               f"nothing was written to sshd_config."}
+        q = shlex.quote(username)
+        config = "/etc/ssh/sshd_config"
+
+        # One script, run as root, so the read, the check and the edit all see
+        # the same file. The password arrives on stdin, never in the command
+        # string, where any user on the box could read it from `ps`.
+        script = rf'''
+set -u
+cfg={config}
+user={q}
+[ -f "$cfg" ] || {{ echo "NOFILE"; exit 1; }}
+
+# Already listed? Then there is nothing to do.
+if grep -Eq "^[[:space:]]*AllowUsers[^#]*\\\\b$user\\\\b" "$cfg"; then
+  echo "ALREADY"; exit 0
+fi
+
+ts=$(date +%Y%m%d-%H%M%S)
+bak="$cfg.bt-auto-$ts"
+cp -p "$cfg" "$bak" || {{ echo "NOBACKUP"; exit 1; }}
+
+# Append to the LAST AllowUsers line. Several AllowUsers directives are
+# additive, so which one it goes on does not change who may log in; the last is
+# the customer list on this server.
+python3 - "$cfg" "$user" <<'PYEOF'
+import re, sys
+cfg, user = sys.argv[1], sys.argv[2]
+lines = open(cfg).read().splitlines(keepends=True)
+target = None
+for i, ln in enumerate(lines):
+    if re.match(r"^\\s*AllowUsers\\b", ln) and not ln.lstrip().startswith("#"):
+        target = i
+if target is None:
+    sys.exit(3)
+line = lines[target]
+if not line.endswith("\\n"):
+    line += "\\n"
+lines[target] = line.rstrip("\\n") + " " + user + "\\n"
+open(cfg, "w").write("".join(lines))
+PYEOF
+rc=$?
+if [ $rc -ne 0 ]; then cp -p "$bak" "$cfg"; echo "EDITFAIL"; exit 1; fi
+
+# Validate before reloading. An invalid sshd_config stops sshd restarting,
+# which would cut off SFTP for every customer, so it must never be loaded.
+if ! sshd -t 2>/dev/null; then
+  cp -p "$bak" "$cfg"
+  echo "INVALID"; exit 1
+fi
+
+# The unit is named sshd on some distributions and ssh on others -- on the
+# DirectAdmin server it is "ssh" -- so ask systemd which one is loaded rather
+# than firing a command that is bound to fail.
+unit=$(systemctl list-units --type=service --state=running --no-legend 2>/dev/null \
+       | awk '{{print $1}}' | grep -E '^(sshd?|ssh)\.service$' | head -1)
+unit=${{unit:-ssh.service}}
+systemctl reload "$unit" >/dev/null 2>&1
+if [ $? -ne 0 ]; then cp -p "$bak" "$cfg"; echo "RELOADFAIL"; exit 1; fi
+echo "OK"
+rm -f "$bak"
+'''
+        rc, out, err = self.ssh.execute(f"sudo -S -p '' sh -s",
+                                        stdin_data=(settings.DIRECTADMIN.sudo_password or "") + "\n"
+                                                    + script)
+        result = " ".join((out or err or "").split())
+        if "ALREADY" in result:
+            return {"success": True, "step": "sftp_access",
+                    "message": f"{username} was already allowed in sshd_config."}
+        if result.strip().endswith("OK"):
+            return {"success": True, "step": "sftp_access",
+                    "message": f"{username} added to AllowUsers and sshd reloaded."}
+        reason = {
+            "NOFILE": "sshd_config not found on the server.",
+            "NOBACKUP": "Could not write a backup of sshd_config; nothing was changed.",
+            "EDITFAIL": "Could not edit sshd_config; the original was restored.",
+            "INVALID": "The edit produced an invalid sshd_config, so it was "
+                       "reverted and sshd was NOT reloaded.",
+            "RELOADFAIL": "sshd would not reload; the original was restored.",
+        }.get(result.strip(), f"Unexpected result from the server: {result[:160]}")
+        return {"success": False, "step": "sftp_access", "message": reason}
 
     def account_exists(self, username: str) -> bool:
         """

@@ -425,6 +425,36 @@ async def create_account(payload: AccountCreateRequest):
                 fields=payload.nic_fields,
             )
 
+
+def run_post_create_steps(result) -> list:
+    """
+    The per-panel steps that must follow a successful account creation.
+
+    Each is reported separately and none can fail the account. An account that
+    exists but cannot SFTP is a problem an operator can see and fix; an account
+    that exists while the API reports failure invites a retry, and a retry
+    creates a second account for the same domain.
+
+    Skipped on a dry run, which creates nothing.
+    """
+    steps = []
+    if result.panel == "cpanel":
+        prov = get_cpanel_provisioner()
+        steps.append(prov.enable_ipv6(result.username))
+    elif result.panel == "directadmin":
+        prov = get_da_provisioner()
+        steps.append(prov.allow_sftp_user(result.username))
+    for step in steps:
+        if step.get("success"):
+            logger.info("Post-create %s for %s: %s",
+                        step.get("step"), result.username, step.get("message"))
+        else:
+            # Deliberately a warning, not an exception: the account is created.
+            logger.warning("Post-create %s FAILED for %s: %s",
+                           step.get("step"), result.username, step.get("message"))
+    return steps
+
+
     return {
         "success": True,
         "message": result.message,
@@ -442,6 +472,8 @@ async def create_account(payload: AccountCreateRequest):
             "handover_text": result.handover_text,
             "email_status": email_status,
             "nic_status": nic_status,
+            "post_create": ([] if payload.dry_run
+                            else run_post_create_steps(result)),
         }
     }
 

@@ -689,6 +689,29 @@ function describeApiError(result, status) {
 }
 
 // Render the outcome of the nic.bt.bt registry push, if one was requested.
+// The per-panel steps that run after an account is created: IPv6 on cPanel,
+// SFTP access on DirectAdmin. Neither can fail the account, so a failure here
+// is a warning the operator has to act on -- and one that is not shown is one
+// that gets missed.
+function renderPostCreate(steps) {
+  const box = document.getElementById("res-post-create");
+  if (!box) return;
+  if (!steps || !steps.length) { box.classList.add("hidden"); box.innerHTML = ""; return; }
+
+  const ok = steps.filter((s) => s.success).length;
+  const bad = steps.length - ok;
+  box.className = `res-dns-status ${bad ? "dns-warn" : "dns-ok"}`;
+  box.classList.remove("hidden");
+  box.innerHTML = `<div class="dns-head">
+      <span class="dns-badge">${bad ? `${bad} step needs attention` : "Setup steps complete"}</span>
+      <code>${ok} of ${steps.length} done</code>
+    </div>` + steps.map((s) => `<p class="${s.success ? "pc-ok" : "pc-bad"}">
+      ${s.success ? "✓" : "⚠"} <strong>${esc(s.step || "step")}</strong> — ${esc(s.message || "")}
+    </p>`).join("") +
+    (bad ? `<p class="pc-note">The hosting account was created. Only the step above
+      did not complete; the customer cannot use that part until it is done.</p>` : "");
+}
+
 function renderNicStatus(nic) {
   const box = document.getElementById("res-nic-status");
   if (!box) return;
@@ -1069,6 +1092,7 @@ async function handleProvisionSubmit(e) {
     latestAccountData = result.data;
     renderResult(result.data);
     renderNicStatus(result.data.nic_status);
+    renderPostCreate(result.data.post_create);
     // Asked for separately, after the account is safely created. Keeping the
     // lookup out of the provisioning request means a slow or broken resolver
     // cannot delay it, and cannot make a successful provisioning look failed.

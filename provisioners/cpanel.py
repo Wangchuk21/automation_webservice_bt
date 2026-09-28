@@ -5,6 +5,7 @@ import shlex
 from typing import Optional, Dict, Any
 import requests
 
+from config import settings
 from .base import (
     BaseProvisioner,
     ProvisionerResult,
@@ -391,6 +392,59 @@ class CPanelProvisioner(BaseProvisioner):
                 domain, username, password, email,
                 f"WHM API request failed: {str(e)}"
             )
+
+    def enable_ipv6(self, username: str) -> Dict[str, Any]:
+        """
+        Give a cPanel account an IPv6 address from the server's range.
+
+        Uses the WHM API 1 function `ipv6_enable_account`, which takes the
+        account and the name of a range configured in WHM. Both were read from
+        the server itself -- the function list in
+        /usr/local/cpanel/Whostmgr/API/1/IPv6.pm and the ranges from
+        `whmapi1 ipv6_range_list` -- rather than assumed. The obvious guess,
+        `ipv6_create`, does not exist on WHM API 1.
+
+        Run over SSH with sudo because the WHM API token is not usable for
+        this: it returns "Access denied" for every function tried, including
+        ones known to work.
+
+        Idempotent: an account that already has an address reports success,
+        because cPanel refuses the second attempt rather than issuing a new one.
+        """
+        username = (username or "").strip().lower()
+        if not username:
+            return {"success": False, "step": "ipv6", "message": "No username given."}
+
+        # shlex.quote, not string interpolation: this is a shell command and the
+        # value is not ours to trust.
+        cmd = (
+            "whmapi1 --output=json "
+            f"ipv6_enable_account user={shlex.quote(username)} "
+            f"range={shlex.quote(settings.CPANEL_IPV6_RANGE)}"
+        )
+        rc, out, err = self.ssh.execute(f"sudo -S -p '' {cmd}",
+                                        stdin_data=f"{settings.CPANEL.sudo_password}\n")
+
+        body = " ".join((out or err or "").split())
+        if '"result":1' in body.replace(" ", "").replace('"result": 1', '"result":1'):
+            return {"success": True, "step": "ipv6",
+                    "message": f"IPv6 assigned to {username} from the "
+                               f"{settings.CPANEL_IPV6_RANGE} range."}
+        if '"result":0' in body.replace(" ", "").replace('"result": 0', '"result":0'):
+            reason = self._whm_reason(body)
+            if reason and "already" in reason.lower():
+                return {"success": True, "step": "ipv6",
+                        "message": f"{username} already has an IPv6 address."}
+            return {"success": False, "step": "ipv6",
+                    "message": f"IPv6 not assigned: {reason or body[:200]}"}
+        return {"success": False, "step": "ipv6",
+                "message": f"whmapi1 gave no result (rc={rc}): {body[:200]}"}
+
+    @staticmethod
+    def _whm_reason(body: str) -> str:
+        """Pull WHM's 'reason' string out of its JSON error envelope."""
+        m = re.search(r'"reason"\s*:\s*"([^"]*)"', body)
+        return m.group(1) if m else ""
 
     def account_exists(self, username: str) -> bool:
         """
