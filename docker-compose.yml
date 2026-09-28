@@ -25,6 +25,14 @@ services:
     container_name: bt_provisioner
     restart: unless-stopped
 
+    # Must match the suspender below. datetime.now().astimezone() is what stamps
+    # the surrender audit log and the suspension report's "last run", and it uses
+    # the container's local time: without this the provisioner wrote UTC while the
+    # nightly job wrote +06, so the two audit trails disagreed by six hours and
+    # every recorded action read as if it happened at the wrong time of day.
+    environment:
+      TZ: Asia/Thimphu
+
     # All configuration comes from .env -- credentials never enter the image.
     env_file:
       - .env
