@@ -50,6 +50,81 @@ def _request_with_retry(session, method: str, url: str, attempts: int = REGISTRY
     raise last_exc
 
 
+# The nic.bt.bt domain form's 23 required fields, in the portal's own order.
+#
+# "source" says where each value comes from:
+#   customer  -- collected from the customer on the dashboard
+#   derived   -- copied from another customer field
+#   default   -- Bhutan Telecom's own details, from config
+#   computed  -- built from the domain name
+#
+# This is the single source of truth. The client builds its payload from it and
+# the dashboard renders its form from it, so the two cannot drift apart -- which
+# is how ten hardcoded values went unnoticed, invisible from both sides.
+REGISTRY_FIELDS = (
+    {"name": "domain", "label": "Domain name", "source": "computed", "required": True},
+    {"name": "ext", "label": "Extension", "source": "computed", "required": True,
+     "options": [".bt", ".com.bt", ".org.bt", ".gov.bt", ".edu.bt"]},
+    {"name": "registrar", "label": "Registrar", "source": "default", "required": True},
+    {"name": "reg_renewal", "label": "Renewal date", "source": "customer", "required": True},
+    {"name": "customername", "label": "Customer name", "source": "customer", "required": True},
+    {"name": "address", "label": "Address", "source": "customer", "required": True},
+    {"name": "postalcode", "label": "Postal code", "source": "customer", "required": True},
+    {"name": "phone", "label": "Telephone", "source": "customer", "required": True},
+    {"name": "email", "label": "Email", "source": "customer", "required": True},
+    {"name": "country", "label": "Country", "source": "customer", "required": True},
+    {"name": "tech_name", "label": "Technical contact name", "source": "default", "required": True},
+    {"name": "tech_address", "label": "Technical contact address", "source": "default", "required": True},
+    {"name": "tech_postalcode", "label": "Technical postal code", "source": "default", "required": True},
+    {"name": "tech_phone", "label": "Technical telephone", "source": "default", "required": True},
+    {"name": "tech_fax", "label": "Technical fax", "source": "default", "required": True},
+    {"name": "tech_country", "label": "Technical country", "source": "default", "required": True},
+    {"name": "tech_email", "label": "Technical email", "source": "default", "required": True},
+    {"name": "billing_name", "label": "Billing name", "source": "derived",
+     "derived_from": "customername", "required": True},
+    {"name": "billing_address", "label": "Billing address", "source": "derived",
+     "derived_from": "address", "required": True},
+    {"name": "billing_contact", "label": "Billing contact", "source": "derived",
+     "derived_from": "phone", "required": True},
+    {"name": "billing_fax", "label": "Billing fax", "source": "default", "required": True},
+    {"name": "billing_country", "label": "Billing country", "source": "default", "required": True},
+    {"name": "billing_email", "label": "Billing email", "source": "derived",
+     "derived_from": "email", "required": True},
+)
+
+
+def registry_field_spec() -> Dict[str, Any]:
+    """
+    The registry's required fields with the value each takes by default.
+
+    The dashboard renders its form from this, so the operator sees every field
+    the registry demands -- including the ten Bhutan Telecom technical details
+    that were previously hardcoded and invisible -- and can override any of them
+    before submitting.
+    """
+    s = settings
+    defaults = {
+        "registrar": s.NIC_REGISTRAR,
+        "tech_name": s.NIC_TECH_NAME,
+        "tech_address": s.NIC_TECH_ADDRESS,
+        "tech_postalcode": s.NIC_TECH_POSTALCODE,
+        "tech_phone": s.NIC_TECH_PHONE,
+        "tech_fax": s.NIC_TECH_FAX,
+        "tech_country": s.NIC_TECH_COUNTRY,
+        "tech_email": s.NIC_TECH_EMAIL,
+        "billing_fax": s.NIC_BILLING_FAX,
+        "billing_country": s.NIC_BILLING_COUNTRY,
+    }
+    counts: Dict[str, int] = {}
+    for f in REGISTRY_FIELDS:
+        counts[f["source"]] = counts.get(f["source"], 0) + 1
+    return {
+        "fields": [dict(f, default=defaults.get(f["name"], "")) for f in REGISTRY_FIELDS],
+        "required_count": sum(1 for f in REGISTRY_FIELDS if f.get("required")),
+        "source_counts": counts,
+    }
+
+
 def split_domain_ext(full_domain: str) -> Tuple[str, str]:
     """
     Splits domain into base name and extension.
@@ -183,25 +258,25 @@ class NICClient:
                     "_token": csrf_token,
                     "_method": "PATCH",
                     "domain": base_domain,
-                    "registrar": "DrukNet",
+                    "registrar": settings.NIC_REGISTRAR,
                     "reg_renewal": reg_date_str,
                     "customername": customer_name,
                     "address": address or "Thimphu, Bhutan",
-                    "postalcode": postalcode or "-",
+                    "postalcode": postalcode or settings.NIC_PLACEHOLDER,
                     "phone": phone or "+975",
                     "email": email,
-                    "country": country or "BT",
-                    "tech_name": "DrukNet Systems",
-                    "tech_address": "Bhutan Telecom Ltd, Thimphu",
-                    "tech_postalcode": "-",
-                    "tech_phone": "+975-2-343434",
-                    "tech_fax": "-",
-                    "tech_country": "BT",
-                    "tech_email": "systems@bt.bt",
+                    "country": country or settings.NIC_DEFAULT_COUNTRY,
+                    "tech_name": settings.NIC_TECH_NAME,
+                    "tech_address": settings.NIC_TECH_ADDRESS,
+                    "tech_postalcode": settings.NIC_TECH_POSTALCODE,
+                    "tech_phone": settings.NIC_TECH_PHONE,
+                    "tech_fax": settings.NIC_TECH_FAX,
+                    "tech_country": settings.NIC_TECH_COUNTRY,
+                    "tech_email": settings.NIC_TECH_EMAIL,
                     "billing_name": customer_name,
                     "billing_address": address or "Thimphu, Bhutan",
                     "billing_contact": phone or "+975",
-                    "billing_fax": "-",
+                    "billing_fax": settings.NIC_BILLING_FAX,
                     "billing_country": country or "BT",
                     "billing_email": email
                 }
@@ -235,25 +310,25 @@ class NICClient:
                     "_token": csrf_token,
                     "domain": base_domain,
                     "ext": ext,
-                    "registrar": "DrukNet",
+                    "registrar": settings.NIC_REGISTRAR,
                     "reg_renewal": reg_date_str,
                     "customername": customer_name,
                     "address": address or "Thimphu, Bhutan",
-                    "postalcode": postalcode or "-",
+                    "postalcode": postalcode or settings.NIC_PLACEHOLDER,
                     "phone": phone or "+975",
                     "email": email,
-                    "country": country or "BT",
-                    "tech_name": "DrukNet Systems",
-                    "tech_address": "Bhutan Telecom Ltd, Thimphu",
-                    "tech_postalcode": "-",
-                    "tech_phone": "+975-2-343434",
-                    "tech_fax": "-",
-                    "tech_country": "BT",
-                    "tech_email": "systems@bt.bt",
+                    "country": country or settings.NIC_DEFAULT_COUNTRY,
+                    "tech_name": settings.NIC_TECH_NAME,
+                    "tech_address": settings.NIC_TECH_ADDRESS,
+                    "tech_postalcode": settings.NIC_TECH_POSTALCODE,
+                    "tech_phone": settings.NIC_TECH_PHONE,
+                    "tech_fax": settings.NIC_TECH_FAX,
+                    "tech_country": settings.NIC_TECH_COUNTRY,
+                    "tech_email": settings.NIC_TECH_EMAIL,
                     "billing_name": customer_name,
                     "billing_address": address or "Thimphu, Bhutan",
                     "billing_contact": phone or "+975",
-                    "billing_fax": "-",
+                    "billing_fax": settings.NIC_BILLING_FAX,
                     "billing_country": country or "BT",
                     "billing_email": email
                 }

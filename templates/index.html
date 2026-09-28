@@ -242,6 +242,27 @@
               </div>
               <span class="form-hint">Leave blank to use today's date. Registrations are normally renewed annually.</span>
             </div>
+
+            <!-- Exactly what nic.bt.bt requires, and where each value comes from.
+                 Ten of these used to be hardcoded in the client and invisible. -->
+            <details class="nic-spec" id="nic_spec">
+              <summary class="nic-spec-summary">
+                Registry details required by nic.bt.bt — <span id="nic_spec_count">loading…</span>
+              </summary>
+              <p class="form-hint">
+                <span class="tag tag-customer">from customer</span>
+                <span class="tag tag-derived">copied from above</span>
+                <span class="tag tag-default">Bhutan Telecom default</span>
+                <span class="tag tag-computed">from the domain</span>
+                &nbsp;Every field below is required by the registry. Edit a default here to
+                override it for this registration.
+              </p>
+              <div id="nic_spec_fields" class="nic-spec-grid">Loading…</div>
+              <h4 class="surrender-preview-title" style="margin-top:16px">
+                Exactly what will be submitted to nic.bt.bt
+              </h4>
+              <pre id="nic_spec_payload" class="nic-spec-payload">Enter a domain to preview the payload.</pre>
+            </details>
           </div>
 
           <!-- Action Buttons -->

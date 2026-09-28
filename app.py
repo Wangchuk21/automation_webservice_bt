@@ -24,7 +24,7 @@ from provisioners.base import (
     ValidationError,
 )
 from notifier import send_customer_welcome_email, test_smtp_connection
-from nic_client import NICClient, split_domain_ext
+from nic_client import NICClient, registry_field_spec, split_domain_ext
 from bscs_client import BSCSClient, BSCSError
 from suspension import (
     SKIP_ALREADY_BILLING, SKIP_NO_MATCH, SKIP_OTHER_REASON, SUSPEND, latest_report,
@@ -769,6 +769,18 @@ async def suspend_account_now(
 
     return {"success": True, "message": result.get("message", ""),
             "panel": panel_norm, "username": username, "domain": state.get("domain", "")}
+
+
+@app.get("/api/v1/nic/field-spec", dependencies=[Depends(require_api_token)])
+async def nic_field_spec():
+    """
+    Every field nic.bt.bt requires, with where each value comes from.
+
+    Lets the dashboard render the registry form from the same list the client
+    submits, so the operator can see -- and override -- the Bhutan Telecom
+    technical and billing details that used to be hardcoded and invisible.
+    """
+    return registry_field_spec()
 
 
 @app.post("/api/v1/nic/test", dependencies=[Depends(require_api_token)])

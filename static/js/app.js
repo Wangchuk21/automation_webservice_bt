@@ -322,6 +322,126 @@ document.addEventListener("DOMContentLoaded", () => {
 });
 
 // ========================================================
+// nic.bt.bt REGISTRY FIELD SPEC
+// Renders the registry's required fields from the same list the client
+// submits, so nothing is hidden in code.
+// ========================================================
+
+let NIC_SPEC = null;
+
+const SOURCE_LABEL = {
+  customer: "from customer",
+  derived: "copied from above",
+  default: "Bhutan Telecom default",
+  computed: "from the domain",
+};
+
+async function loadNicSpec() {
+  const box = document.getElementById("nic_spec_fields");
+  if (!box) return;
+  try {
+    const res = await fetch("/api/v1/nic/field-spec", { headers: apiHeaders() });
+    if (!res.ok) {
+      box.textContent = `Unavailable (HTTP ${res.ok ? "" : res.status}).`;
+      return;
+    }
+    const spec = await res.json();
+    NIC_SPEC = spec;
+    const c = spec.source_counts || {};
+    document.getElementById("nic_spec_count").textContent =
+      `${spec.required_count} fields · ${c.customer || 0} from the customer, ` +
+      `${c.default || 0} BT defaults, ${c.derived || 0} copied, ${c.computed || 0} computed`;
+
+    box.innerHTML = spec.fields.map((f) => {
+      const tag = `<span class="tag tag-${f.source}">${esc(SOURCE_LABEL[f.source] || f.source)}</span>`;
+      if (f.source === "computed") {
+        return `<div class="nic-spec-row"><label>${esc(f.label)} <code>${esc(f.name)}</code></label>
+                <div class="nic-spec-val nic-spec-computed" data-nic="auto">—</div>${tag}</div>`;
+      }
+      if (f.source === "default") {
+        return `<div class="nic-spec-row"><label>${esc(f.label)} <code>${esc(f.name)}</code></label>
+                <div class="nic-spec-val"><input type="text" data-nic="${esc(f.name)}"
+                     value="${esc(f.default || "")}"></div>${tag}</div>`;
+      }
+      return `<div class="nic-spec-row"><label>${esc(f.label)} <code>${esc(f.name)}</code></label>
+              <div class="nic-spec-val"><input type="text" data-nic="${esc(f.name)}"
+                data-derived-from="${esc(f.derived_from || "")}" placeholder="from the form above"></div>${tag}</div>`;
+    }).join("");
+
+    box.querySelectorAll("input[data-nic]").forEach((el) => {
+      el.addEventListener("input", renderNicPayload);
+      el.addEventListener("change", renderNicPayload);
+    });
+    renderNicPayload();
+  } catch (e) {
+    box.textContent = e.message;
+  }
+}
+
+// The payload preview: shows the operator precisely what will be POSTed.
+function renderNicPayload() {
+  const pre = document.getElementById("nic_spec_payload");
+  if (!pre || !NIC_SPEC) return;
+
+  const domainInput = document.getElementById("domain");
+  const full = (domainInput && domainInput.value.trim().toLowerCase()) || "";
+  if (!full) {
+    pre.textContent = "Enter a domain to preview the payload.";
+    return;
+  }
+
+  // Split the extension off the way the client does.
+  const known = [".com.bt", ".org.bt", ".net.bt", ".gov.bt", ".edu.bt", ".bt"];
+  let base = full, ext = "";
+  for (const e of known) {
+    if (full.endsWith(e)) { base = full.slice(0, -e.length); ext = e; break; }
+  }
+  if (!ext) { const i = full.indexOf("."); if (i > 0) { base = full.slice(0, i); ext = full.slice(i); } }
+
+  // Read the customer's own fields from the provisioning form, falling back to
+  // the dashboard's own values where the operator has typed them here.
+  const fromForm = {
+    customername: "customer_name", address: "address", postalcode: "postal_code",
+    phone: "phone", email: "email", country: "country", reg_renewal: "renewal_date",
+  };
+  const payload = {};
+  NIC_SPEC.fields.forEach((f) => {
+    const input = document.querySelector(`input[data-nic="${f.name}"]`);
+    if (f.source === "computed") {
+      payload[f.name] = f.name === "domain" ? base : ext;
+      return;
+    }
+    if (input && input.value.trim()) { payload[f.name] = input.value.trim(); return; }
+    if (f.source === "customer" && fromForm[f.name]) {
+      const el = document.getElementById(fromForm[f.name]);
+      if (el && el.value.trim()) { payload[f.name] = el.value.trim(); return; }
+    }
+    if (f.source === "derived" && f.derived_from) { payload[f.name] = `(same as ${f.derived_from})`; return; }
+    if (f.source === "default") { payload[f.name] = f.default; return; }
+    payload[f.name] = "";
+  });
+
+  const missing = NIC_SPEC.fields
+    .filter((f) => f.required && !payload[f.name])
+    .map((f) => f.name);
+
+  pre.textContent =
+    JSON.stringify(payload, null, 2) +
+    (missing.length
+      ? `\n\nMISSING REQUIRED: ${missing.join(", ")}  — the registry will reject this.`
+      : "\n\nAll required fields have a value.");
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  loadNicSpec();
+  const d = document.getElementById("domain");
+  if (d) {
+    d.addEventListener("input", renderNicPayload);
+    d.addEventListener("blur", renderNicPayload);
+  }
+});
+
+// ========================================================
 // FRONTEND INTERACTIONS - AUTOMATION WEBSERVICE BT
 // ========================================================
 

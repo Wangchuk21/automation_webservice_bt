@@ -126,6 +126,28 @@ class Config:
     NIC_USER: str = os.getenv("NIC_USER", "admin@bt.bt")
     NIC_PASSWORD: str = os.getenv("NIC_PASSWORD", "")
 
+    # --- nic.bt.bt registry field defaults ---
+    # The registry's domain form has 23 required fields. Only six come from the
+    # customer (name, address, postal code, phone, email, country); the rest are
+    # Bhutan Telecom's own registrar and technical-contact details, which used to
+    # be hardcoded inside nic_client.py. They live here so they can be corrected
+    # without a code change, and so the dashboard can show the operator exactly
+    # what will be submitted instead of silently guessing.
+    NIC_REGISTRAR: str = os.getenv("NIC_REGISTRAR", "DrukNet")
+    NIC_TECH_NAME: str = os.getenv("NIC_TECH_NAME", "DrukNet Systems")
+    NIC_TECH_ADDRESS: str = os.getenv("NIC_TECH_ADDRESS", "Bhutan Telecom Ltd, Thimphu")
+    NIC_TECH_POSTALCODE: str = os.getenv("NIC_TECH_POSTALCODE", "-")
+    NIC_TECH_PHONE: str = os.getenv("NIC_TECH_PHONE", "+975-2-343434")
+    NIC_TECH_FAX: str = os.getenv("NIC_TECH_FAX", "-")
+    NIC_TECH_COUNTRY: str = os.getenv("NIC_TECH_COUNTRY", "BT")
+    NIC_TECH_EMAIL: str = os.getenv("NIC_TECH_EMAIL", "systems@bt.bt")
+    NIC_BILLING_FAX: str = os.getenv("NIC_BILLING_FAX", "-")
+    NIC_BILLING_COUNTRY: str = os.getenv("NIC_BILLING_COUNTRY", "BT")
+    # Placeholder used where the registry marks a field required but there is
+    # genuinely no value. Real records on the registry use "-" for these.
+    NIC_PLACEHOLDER: str = os.getenv("NIC_PLACEHOLDER", "-")
+    NIC_DEFAULT_COUNTRY: str = os.getenv("NIC_DEFAULT_COUNTRY", "BT")
+
     # --- Service surrender (termination) ---
     # A surrender destroys customer data, so it is deliberately harder to
     # trigger than account creation: the scanned surrender letter is required
