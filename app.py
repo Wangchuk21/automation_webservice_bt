@@ -1,5 +1,6 @@
 import secrets
 import logging
+from datetime import date
 from fastapi import FastAPI, HTTPException, Request, Depends, Header, Form, UploadFile, File
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -26,7 +27,8 @@ from provisioners.base import (
 )
 from notifier import send_customer_welcome_email, test_smtp_connection
 from nic_client import (
-    NICClient, REGISTRY_FIELDS, registry_field_spec, split_domain_ext,
+    NICClient, REGISTRY_FIELDS, build_registry_payload, missing_registry_fields,
+    registry_field_spec, split_domain_ext,
 )
 from bscs_client import BSCSClient, BSCSError
 from dns_check import check_domain
@@ -359,6 +361,30 @@ async def create_account(payload: AccountCreateRequest):
     else:
         raise HTTPException(status_code=400, detail=f"Invalid panel '{payload.panel}'. Must be 'cpanel' or 'directadmin'.")
 
+    # Validate the registry fields before the account exists.
+    #
+    # This used to run after create_account, which was wrong twice over: it
+    # reported a failure for an account that had already been created, inviting
+    # a retry that would collide, and it read payload.postal_code, a field the
+    # form stopped sending when the 23 registry fields replaced the old eight.
+    # Ticking the registry option therefore always failed.
+    if payload.register_nic and not payload.dry_run:
+        base, derived_ext = split_domain_ext(payload.domain)
+        resolved = build_registry_payload(
+            payload.nic_fields, base, payload.ext or derived_ext,
+            payload.renewal_date or date.today().strftime("%Y-%m-%d"),
+        )
+        missing = missing_registry_fields(resolved)
+        if missing:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "nic.bt.bt requires these fields, which are empty: "
+                    + ", ".join(missing)
+                    + ". Fill them in on the form, or untick the registry option."
+                ),
+            )
+
     result = prov.create_account(
         domain=payload.domain,
         username=payload.username,
@@ -387,17 +413,6 @@ async def create_account(payload: AccountCreateRequest):
 
     nic_status = None
     if payload.register_nic:
-        if not payload.postal_code:
-            # nic.bt.bt marks postal code as required on the domain form. Fail
-            # here with a clear message rather than submitting "-" and getting an
-            # opaque rejection from the registry after the account is created.
-            raise HTTPException(
-                status_code=422,
-                detail=(
-                    "postal_code is required to register a domain on nic.bt.bt. "
-                    "Supply the customer's postal code, or untick the registry option."
-                ),
-            )
         if payload.dry_run:
             # Report the skip explicitly; returning None makes the dashboard
             # show nothing at all, which reads as "silently ignored".
@@ -424,6 +439,29 @@ async def create_account(payload: AccountCreateRequest):
                 ext=payload.ext,
                 fields=payload.nic_fields,
             )
+
+
+    return {
+        "success": True,
+        "message": result.message,
+        "data": {
+            "panel": result.panel,
+            "domain": result.domain,
+            "username": result.username,
+            "password": result.password,
+            "email": result.email,
+            "web_url": result.web_url,
+            "sftp_host": result.sftp_host,
+            "sftp_port": result.sftp_port,
+            "doc_root": result.doc_root,
+            "nameservers": result.nameservers,
+            "handover_text": result.handover_text,
+            "email_status": email_status,
+            "nic_status": nic_status,
+            "post_create": ([] if payload.dry_run
+                            else run_post_create_steps(result)),
+        }
+    }
 
 
 def run_post_create_steps(result) -> list:
@@ -453,29 +491,6 @@ def run_post_create_steps(result) -> list:
             logger.warning("Post-create %s FAILED for %s: %s",
                            step.get("step"), result.username, step.get("message"))
     return steps
-
-
-    return {
-        "success": True,
-        "message": result.message,
-        "data": {
-            "panel": result.panel,
-            "domain": result.domain,
-            "username": result.username,
-            "password": result.password,
-            "email": result.email,
-            "web_url": result.web_url,
-            "sftp_host": result.sftp_host,
-            "sftp_port": result.sftp_port,
-            "doc_root": result.doc_root,
-            "nameservers": result.nameservers,
-            "handover_text": result.handover_text,
-            "email_status": email_status,
-            "nic_status": nic_status,
-            "post_create": ([] if payload.dry_run
-                            else run_post_create_steps(result)),
-        }
-    }
 
 
 # ---------------------------------------------------------------------------
