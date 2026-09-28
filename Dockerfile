@@ -65,7 +65,8 @@ RUN chmod 0644 /etc/cron.d/bt-suspension && chown root:root /etc/cron.d/bt-suspe
 # Surrender evidence and the audit trail are written at runtime. The directory
 # is created and owned here so that mounting a volume over /app/data inherits
 # the right ownership; without this the upload fails with EACCES.
-RUN mkdir -p /app/data/surrenders && chown -R provisioner:provisioner /app/data
+RUN mkdir -p /app/data/surrenders /app/suspension \
+    && chown -R provisioner:provisioner /app/data /app/suspension
 
 USER provisioner
 

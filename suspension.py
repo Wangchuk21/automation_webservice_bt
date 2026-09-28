@@ -454,12 +454,18 @@ def unmatched_lapsed(path: Optional[str] = None) -> List[Dict[str, Any]]:
     return rec.get("unmatched_contracts", []) or []
 
 
-def write_audit(report: RunReport, execution: Dict[str, Any], path: Optional[str] = None) -> str:
+def write_audit(report: RunReport, execution: Dict[str, Any],
+                path: Optional[str] = None) -> Tuple[str, bool]:
     """
-    Append one JSON line recording the whole run.
+    Append one JSON line recording the whole run. Returns (path, written).
 
     Written after execution and never raises into the caller: losing the audit
     trail must not mask the outcome, but it is logged loudly.
+
+    The caller is told whether the write happened. It previously returned only
+    the path, so the caller logged "audit written" after logging the failure --
+    an ERROR and an INFO on the same run, and a dashboard that reported no run
+    recorded with nothing on the console to explain why.
     """
     target = Path(path or settings.SUSPENSION_AUDIT_LOG).expanduser()
     record = report.to_dict()
@@ -468,6 +474,9 @@ def write_audit(report: RunReport, execution: Dict[str, Any], path: Optional[str
         target.parent.mkdir(parents=True, exist_ok=True)
         with open(target, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+        return str(target), True
     except OSError as e:
-        logger.error("Failed to write suspension audit record: %s", e)
-    return str(target)
+        logger.error("Failed to write suspension audit record to %s: %s "
+                     "(the dashboard will report no run recorded until this "
+                     "is fixed)", target, e)
+        return str(target), False

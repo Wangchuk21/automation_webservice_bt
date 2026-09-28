@@ -149,8 +149,16 @@ def main():
     for d in candidates:
         logger.info("%-9s %-16s %-24s %s", d.panel, d.username, d.domain, d.contract)
 
-    audit_path = write_audit(report, execution)
-    logger.info("audit written to %s", audit_path)
+    audit_path, audit_written = write_audit(report, execution)
+    if audit_written:
+        logger.info("audit written to %s", audit_path)
+    else:
+        # write_audit has already logged the cause. Say plainly what it means,
+        # because "audit written" printed next to a permission error is how a
+        # broken audit trail looks like a working one.
+        logger.error("NO AUDIT RECORD WAS WRITTEN to %s. The dashboard will show "
+                     "'no run recorded' and nobody can see what this run decided. "
+                     "The decisions above are only in this log.", audit_path)
 
     acted = [r for r in execution["results"] if r.get("action") == "suspended"]
     failed = [r for r in execution["results"] if not r.get("success")]

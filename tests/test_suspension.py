@@ -22,8 +22,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from suspension import (
     SKIP_ACTIVE, SKIP_ALREADY_BILLING, SKIP_NO_MATCH, SKIP_OTHER_REASON,
-    SUSPEND, SuspensionError, decide, execute, extract_domains, is_billing_reason,
+    SUSPEND, RunReport, SuspensionError, decide, execute, extract_domains,
+    is_billing_reason, write_audit,
 )
+
+
+def _report():
+    """The smallest thing write_audit will accept."""
+    return RunReport(total_accounts=0, bscs_complete=True)
 
 
 def acct(panel="cpanel", username="u", domain="d.bt", suspended=False, reason=""):
@@ -296,3 +302,51 @@ class TestRealWorldScenarios(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestAuditWriteIsReportedHonestly(unittest.TestCase):
+    """
+    Found in the first real run on the production host.
+
+    The job's audit record could not be written -- the volume was root-owned
+    while the job runs as provisioner -- and the run printed an ERROR followed
+    by "audit written to ...". The dashboard then showed "no run recorded", with
+    nothing on the console explaining why, because the one line an operator
+    would have looked at said it had worked.
+
+    Two faults: the Dockerfile created /app/data with the right ownership but
+    not /app/suspension, and write_audit returned only a path, so the caller
+    logged success unconditionally.
+    """
+
+    def test_a_successful_write_reports_true(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            path, written = write_audit(_report(), {"results": []}, path=Path(d) / "a.jsonl")
+            self.assertTrue(written)
+            self.assertTrue(Path(path).exists())
+
+    def test_a_failed_write_reports_false(self):
+        unwritable = Path("/proc/nonexistent-dir/a.jsonl")
+        path, written = write_audit(_report(), {"results": []}, path=unwritable)
+        self.assertFalse(written, "a failed write must not be reported as written")
+
+    def test_the_message_says_what_it_means_when_the_write_failed(self):
+        """The line an operator reads must not claim success."""
+        src = (Path(__file__).resolve().parent.parent
+               / "scripts" / "suspend_expired.py").read_text()
+        self.assertIn("if audit_written:", src)
+        self.assertIn("NO AUDIT RECORD WAS WRITTEN", src)
+
+    def test_the_image_creates_and_owns_the_suspension_directory(self):
+        """A fresh named volume inherits the image directory's ownership. The
+        Dockerfile handled /app/data and missed /app/suspension, so a newly
+        commissioned host could not write its own audit trail."""
+        dockerfile = (Path(__file__).resolve().parent.parent / "Dockerfile").read_text()
+        self.assertIn("/app/suspension", dockerfile)
+        mkdir = [ln for ln in dockerfile.splitlines() if "mkdir -p" in ln]
+        self.assertTrue(any("/app/suspension" in ln for ln in mkdir),
+                        "the image never creates /app/suspension")
+        chown = [ln for ln in dockerfile.splitlines() if "chown -R" in ln]
+        self.assertTrue(any("/app/suspension" in ln for ln in chown),
+                        "and never gives it to the user the job runs as")
