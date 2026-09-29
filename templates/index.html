@@ -418,7 +418,10 @@
               <div class="input-wrapper">
                 <input type="email" id="ds_email" placeholder="For the confirmation" autocomplete="off">
               </div>
-              <span class="form-hint">Where the forwarding confirmation is sent, once verified.</span>
+              <span class="form-hint">Where the forwarding confirmation is sent. The
+            <strong>Send confirmation</strong> button appears under
+            <a href="#domain-service-queue">Domains awaiting DNS</a> once the domain
+            is registered.</span>
             </div>
             <div class="form-group">
               <label for="ds_service" class="form-label">Service <span class="required">*</span></label>
@@ -492,9 +495,10 @@
     <section class="card docs-card" id="domain-service-queue">
       <h3 class="docs-title">⏳ Domains awaiting DNS</h3>
       <p class="docs-desc">
-        Registered, with forwarding requested. Check each one, and notify the customer
-        only once the check confirms it &mdash; the email says the domain is live, so it is
-        only sent when that is true.
+        Every forwarding domain, and the button that emails the customer. Press
+        <strong>Send confirmation</strong> on any row: it checks the forwarding first and
+        opens the email only if the domain really is forwarded. The email says the domain
+        is live, so it only goes out when that is true.
       </p>
       <div id="ds-queue">Loading&hellip;</div>
 

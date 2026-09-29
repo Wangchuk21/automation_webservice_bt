@@ -1514,12 +1514,22 @@ async function registerDomainService() {
     out.className = "surrender-result surrender-step-ok";
     out.innerHTML = `<h4>Registered on nic.bt.bt</h4><p>${esc(data.nic.message || "")}</p>`
       + (service === "forwarding"
-        ? `<p>It is now waiting on the forwarding being done. It will appear under
-             <em>Domains awaiting DNS</em> — notify the customer once the check passes.</p>`
+        ? `<p>Next: check the forwarding, then send the customer their confirmation
+             email. Both are below &mdash; the check will not pass until the
+             forwarding has actually been done by hand.</p>
+           <div class="ds-next-actions">
+             <button type="button" class="btn btn-secondary btn-sm"
+                     onclick="verifyDomain('${esc(domain)}')">Check forwarding</button>
+             <button type="button" class="btn btn-primary btn-sm"
+                     onclick="notifyDomain(this, '${esc(domain)}')">Send confirmation email</button>
+           </div>`
         : `<p>Now create the hosting account from the provisioning form above.</p>`);
     showToast(`${domain} registered`, "success");
-    loadDomainServiceQueue();
-    loadActivity();
+    await loadDomainServiceQueue();
+    await loadActivity();
+    // The operator is looking at this panel, so keep the next step in front of
+    // them rather than leaving them to find a card further down the page.
+    out.scrollIntoView({ behavior: "smooth", block: "nearest" });
   } catch (e) {
     out.className = "surrender-result surrender-step-fail";
     out.innerHTML = `<h4>Failed</h4><p>${esc(e.message)}</p>`;

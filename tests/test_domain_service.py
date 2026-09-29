@@ -876,3 +876,51 @@ class TestTheSendButtonIsThere(unittest.TestCase):
         self.assertIn("async function notifyDomain(btn, domain)", body)
         self.assertNotIn("event.target", body,
                          "the implicit `event` global is not dependable here")
+
+
+class TestTheNextStepIsWhereTheOperatorIsStanding(unittest.TestCase):
+    """
+    Reported with a screenshot of the registration form and the question "where is
+    to send an email saying their domain have been successfully forwarded?"
+
+    The Send button existed the whole time, in the queue card below the form. The
+    form filled the viewport, so the button was entirely off-screen, and the
+    success message pointed at a differently-named card rather than offering the
+    action. Nothing was missing; it was simply nowhere near where anyone would
+    look for it.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        root = Path(__file__).resolve().parent.parent
+        cls.js = (root / "static" / "js" / "app.js").read_text()
+        cls.html = (root / "templates" / "index.html").read_text()
+
+    def test_registering_offers_the_send_right_there(self):
+        body = js_function(self.js, "registerDomainService")
+        self.assertTrue("Send confirmation email" in body,
+                        "the next step must be in the panel the operator is reading")
+        self.assertIn("notifyDomain(this,", body)
+
+    def test_it_offers_the_check_too(self):
+        body = js_function(self.js, "registerDomainService")
+        self.assertTrue("Check forwarding" in body, "no check offered after registering")
+
+    def test_it_no_longer_points_at_a_card_instead_of_offering_the_action(self):
+        body = js_function(self.js, "registerDomainService")
+        self.assertFalse("It will appear under" in body,
+                         "naming another card is not the same as offering the button")
+
+    def test_a_hosted_domain_is_told_to_provision_instead(self):
+        """There is no forwarding to confirm, so offering a send button would be
+        a dead end. The wording is in the script, not the template."""
+        body = js_function(self.js, "registerDomainService")
+        self.assertIn("Now create the hosting account", body)
+
+    def test_the_queue_is_reachable_from_the_form(self):
+        self.assertTrue('href="#domain-service-queue"' in self.html,
+                        "the queue is not reachable from the form")
+
+    def test_the_queue_says_which_button_sends(self):
+        body = self.html.split('id="domain-service-queue"')[1][:900]
+        self.assertIn("Send confirmation", body)

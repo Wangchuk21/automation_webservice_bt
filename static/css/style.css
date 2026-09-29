@@ -1603,3 +1603,13 @@ select.custom-select:focus {
   flex-wrap: wrap;
   margin-top: 12px;
 }
+
+/* The next step after registering a domain, in the panel the operator is
+   already looking at. The queue further down the page is the full list; this is
+   the one domain they just entered. */
+.ds-next-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
