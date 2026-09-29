@@ -27,6 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from fastapi.testclient import TestClient
 
+import activity
 import app as app_module
 import domain_service
 import notifier
@@ -460,3 +461,113 @@ class TestTheCardSitsWhereTheOperatorIsLooking(unittest.TestCase):
         come first, which is where this started."""
         o = self._order()
         self.assertLess(o["domain_service"], o["surrender"])
+
+
+class TestActivityLog(unittest.TestCase):
+    """
+    The record of what has been done.
+
+    It exists because the handover kit only ever showed the result of the action
+    you had just taken, and a reload lost it, and a provisioning left no durable
+    trace at all -- it existed only in container stdout, which rotates. The
+    first provisionings in this system are not recoverable from the system.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.path = Path(self.tmp.name) / "activity.jsonl"
+        p = patch.object(activity, "log_path", return_value=self.path)
+        p.start(); self.addCleanup(p.stop)
+
+    def test_an_event_round_trips(self):
+        activity.record_event(activity.PROVISIONED, "Provisioned wank.bt",
+                              panel="cpanel", username="wank", domain="wank.bt")
+        got = activity.recent()
+        self.assertEqual(len(got), 1)
+        self.assertEqual(got[0]["kind"], activity.PROVISIONED)
+        self.assertEqual(got[0]["domain"], "wank.bt")
+        self.assertTrue(got[0]["at"])
+
+    def test_newest_comes_first(self):
+        for d in ("one.bt", "two.bt", "three.bt"):
+            activity.record_event(activity.PROVISIONED, d, domain=d)
+        self.assertEqual([e["domain"] for e in activity.recent()],
+                         ["three.bt", "two.bt", "one.bt"])
+
+    def test_refusals_are_kept(self):
+        """A refused activation is the answer to 'who tried to bring back an
+        account suspended for abuse'. A successes-only feed hides it."""
+        activity.record_event(activity.ACTIVATED, "REFUSED", outcome=activity.REFUSED)
+        got = activity.recent()
+        self.assertEqual(got[0]["outcome"], activity.REFUSED)
+
+    def test_an_unwritable_log_does_not_fail_the_action(self):
+        """The action already happened; failing the request because the diary
+        is full would be a bad trade."""
+        with patch.object(activity, "log_path",
+                          return_value=Path("/proc/nope/activity.jsonl")):
+            with self.assertLogs(activity.logger, level="ERROR"):
+                self.assertIsNone(activity.record_event(activity.PROVISIONED, "x"))
+
+    def test_a_torn_line_does_not_lose_the_rest(self):
+        activity.record_event(activity.PROVISIONED, "first", domain="one.bt")
+        with open(self.path, "a") as fh:
+            fh.write('{"kind": "cut off')
+        with self.assertLogs(activity.logger, level="WARNING"):
+            self.assertEqual(len(activity.recent()), 1)
+
+    def test_counts_summarise_the_feed(self):
+        activity.record_event(activity.PROVISIONED, "a")
+        activity.record_event(activity.SUSPENDED, "b")
+        activity.record_event(activity.SUSPENDED, "c")
+        self.assertEqual(activity.counts()[activity.SUSPENDED], 2)
+
+    def test_filtering_by_kind(self):
+        activity.record_event(activity.PROVISIONED, "a")
+        activity.record_event(activity.SUSPENDED, "b")
+        got = activity.recent(kinds=[activity.SUSPENDED])
+        self.assertEqual(len(got), 1)
+
+
+class TestEveryActionIsRecorded(unittest.TestCase):
+    """Each of these left no trace, or an incomplete one, before."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = (Path(__file__).resolve().parent.parent / "app.py").read_text()
+        cls.js = (Path(__file__).resolve().parent.parent / "static" / "js" / "app.js").read_text()
+        cls.html = (Path(__file__).resolve().parent.parent
+                    / "templates" / "index.html").read_text()
+
+    def test_a_provisioning_is_recorded(self):
+        self.assertIn("activity.PROVISIONED", self.app)
+
+    def test_a_manual_suspension_is_recorded(self):
+        self.assertIn("activity.SUSPENDED", self.app)
+
+    def test_an_activation_is_recorded(self):
+        self.assertIn("activity.ACTIVATED", self.app)
+
+    def test_a_refused_activation_is_recorded(self):
+        body = self.app.split("if (state.get(\"reason\") or \"\").strip().lower()")[1]
+        self.assertIn("activity.REFUSED", body[:600],
+                      "the refusal must be logged before the raise")
+
+    def test_a_domain_registration_is_recorded(self):
+        self.assertIn("activity.DOMAIN_REGISTERED", self.app)
+
+    def test_the_feed_refreshes_after_each_action(self):
+        self.assertTrue("loadActivity" in self.js)
+        self.assertIn('id="activity-list"', self.html)
+
+    def test_the_formal_trails_are_not_replaced(self):
+        """The activity feed is a convenience. The surrender, suspension and
+        domain-service logs are the records, and they stay."""
+        from config import settings
+        for keep in ("SURRENDER_AUDIT_LOG", "SUSPENSION_AUDIT_LOG",
+                     "DOMAIN_SERVICE_LOG", "ACTIVITY_LOG"):
+            self.assertTrue(getattr(settings, keep, None),
+                            f"{keep} was removed -- it is the formal record, "
+                            f"and the activity feed does not replace it")
+        self.assertIn("are not replaced by this list", self.js)

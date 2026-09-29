@@ -367,6 +367,20 @@
 
     <!-- Standalone DNS check: for an existing account, or when a customer says
          their site is down and the account is known to be correct. -->
+    <!-- What has been done. The handover kit above shows the result of the
+         action you just took and vanishes on reload; a provisioning left no
+         durable record at all. This is the answer to "what have we done". -->
+    <section class="card docs-card" id="activity">
+      <h3 class="docs-title">🗒️ Recent activity</h3>
+      <p class="docs-desc" id="activity-summary">What has been done, newest first.</p>
+      <div class="docs-grid">
+        <div class="docs-box">
+          <div class="docs-box-title">History</div>
+          <div id="activity-list">Loading&hellip;</div>
+        </div>
+      </div>
+    </section>
+
     <!-- Domain service: register a domain, then hosting or forwarding.
          Deliberately directly under the provisioning form: registering a
          domain and then finding out its forwarding is still pending are

@@ -363,6 +363,7 @@ async function activateNow(panel, username) {
                 "error");
     }
     await loadSuspensionReport();
+    await loadActivity();
   } catch (e) {
     box.className = "surrender-result surrender-step-fail";
     box.innerHTML = `<h4>Failed</h4><p>${esc(e.message)}</p>`;
@@ -752,6 +753,7 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   initDomainServices();
+  loadActivity();
 });
 
 // The token to send as X-API-Token, or null when the API is unauthenticated.
@@ -1501,6 +1503,7 @@ async function registerDomainService() {
         : `<p>Now create the hosting account from the provisioning form above.</p>`);
     showToast(`${domain} registered`, "success");
     loadDomainServiceQueue();
+    loadActivity();
   } catch (e) {
     out.className = "surrender-result surrender-step-fail";
     out.innerHTML = `<h4>Failed</h4><p>${esc(e.message)}</p>`;
@@ -1571,6 +1574,7 @@ async function verifyDomain(domain) {
       showToast(data.check.message, "error");
     }
     await loadDomainServiceQueue();
+    await loadActivity();
   } catch (e) {
     showToast(e.message, "error");
   }
@@ -1599,7 +1603,75 @@ async function notifyDomain(domain) {
       showToast(msg, "error");
     }
     await loadDomainServiceQueue();
+    await loadActivity();
   } catch (e) {
     showToast(e.message, "error");
+  }
+}
+
+// ========================================================
+// RECENT ACTIVITY
+// What has been done. The handover kit shows the result of the action you just
+// took and disappears on reload; a provisioning used to leave no durable record
+// at all, existing only in container logs that rotate.
+//
+// Refusals are shown too. A refused activation is the answer to "who tried to
+// bring back an account suspended for abuse" -- a feed of successes only would
+// hide precisely the event worth noticing.
+// ========================================================
+
+const ACTIVITY_STYLE = {
+  provisioned:      { label: "provisioned", cls: "act-ok" },
+  suspended:        { label: "suspended",   cls: "act-warn" },
+  activated:        { label: "activated",   cls: "act-ok" },
+  domain_registered:{ label: "domain",      cls: "act-info" },
+  suspension_run:   { label: "nightly run", cls: "act-info" },
+};
+
+async function loadActivity() {
+  const box = document.getElementById("activity-list");
+  if (!box) return;
+  try {
+    const res = await fetch("/api/v1/activity?limit=40", { headers: apiHeaders() });
+    if (!res.ok) { box.textContent = `Unavailable (HTTP ${res.status}).`; return; }
+    const data = await res.json();
+    const events = data.events || [];
+    const c = data.counts || {};
+
+    document.getElementById("activity-summary").innerHTML =
+      `What has been done, newest first &mdash; `
+      + `${c.provisioned || 0} provisioned, ${c.suspended || 0} suspended, `
+      + `${c.activated || 0} activated, ${c.domain_registered || 0} domains registered.`
+      + ` Refusals are kept: they say what somebody tried and what stopped them.`;
+
+    if (!events.length) {
+      box.innerHTML = '<span class="form-hint">Nothing recorded yet. Provisioning a '
+                    + 'hosting account or registering a domain will appear here.</span>';
+      return;
+    }
+
+    box.innerHTML = `<table class="surrender-table">
+      <thead><tr><th>When</th><th>What</th><th>Domain / account</th>
+        <th>Outcome</th></tr></thead>
+      <tbody>${events.map((e) => {
+        const style = ACTIVITY_STYLE[e.kind] || { label: e.kind, cls: "act-info" };
+        const who = [e.domain, e.username].filter(Boolean).join(" &middot; ")
+          || e.detail && e.detail.customer || "&mdash;";
+        return `<tr>
+          <td><span class="act-when">${esc((e.at || "").replace("T", " ").slice(0, 19))}</span></td>
+          <td><span class="act-kind ${style.cls}">${esc(style.label)}</span></td>
+          <td>${esc(who)}</td>
+          <td>${e.outcome === "refused"
+            ? '<span class="pill pill-fail">refused</span>'
+            : (e.outcome === "failed"
+                ? '<span class="pill pill-pending">failed</span>'
+                : '<span class="pill pill-done">done</span>')}</td>
+        </tr>`;
+      }).join("")}</tbody></table>
+      <p class="form-hint">${events.length} shown. The formal audit trails for
+        surrenders, the nightly job and domain services are kept separately and
+        are not replaced by this list.</p>`;
+  } catch (e) {
+    box.textContent = e.message;
   }
 }

@@ -161,6 +161,12 @@ class Config:
     DOMAIN_SERVICE_LOG: str = os.getenv("DOMAIN_SERVICE_LOG",
                                         "./data/domains/services.jsonl")
 
+    # The cross-cutting "what have we done" feed, shown on the dashboard so a
+    # reload does not lose the answer. Under /app/data with the surrender audit
+    # trail, on the volume that is already backed up. It does not replace those
+    # trails, which remain the formal records.
+    ACTIVITY_LOG: str = os.getenv("ACTIVITY_LOG", "./data/activity.jsonl")
+
     NIC_REGISTRAR: str = os.getenv("NIC_REGISTRAR", "DrukNet")
     # Placeholder used where the registry marks a field required but there is
     # genuinely no value. Real records on the registry use "-" for these.

@@ -1542,3 +1542,31 @@ select.custom-select:focus {
 .ds-live code { font-family: var(--font-mono); color: var(--text-main); }
 .ds-live-ok { color: #6ee7b7; }
 .ds-live-diff { color: #fcd34d; }
+
+/* ========================================================
+   RECENT ACTIVITY
+   The handover kit shows the result of the action you just
+   took and disappears on reload. This is the durable answer
+   to "what have we done", and it keeps refusals, because a
+   refused activation is exactly the event worth noticing.
+   ======================================================== */
+
+.act-when {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.act-kind {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-radius: 999px;
+  padding: 2px 8px;
+  white-space: nowrap;
+}
+.act-ok   { color: #6ee7b7; background: rgba(16, 185, 129, 0.14); }
+.act-warn { color: #fcd34d; background: rgba(251, 191, 36, 0.14); }
+.act-info { color: #93c5fd; background: rgba(59, 130, 246, 0.14); }

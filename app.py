@@ -31,6 +31,7 @@ from nic_client import (
     registry_field_spec, split_domain_ext,
 )
 from bscs_client import BSCSClient, BSCSError
+import activity
 import domain_service
 from domain_service import AWAITING_DNS, NOTIFIED, VERIFIED
 from dns_check import (
@@ -444,6 +445,21 @@ def create_account(payload: AccountCreateRequest):
                 fields=payload.nic_fields,
             )
 
+
+    # The result was shown once on the page and then existed only in the
+    # container's stdout, which rotates. This is what makes "what have we done"
+    # answerable after a reload.
+    activity.record_event(
+        activity.PROVISIONED,
+        f"Provisioned {result.domain} on {activity.panel_label(result.panel)} "
+        f"as {result.username}",
+        panel=result.panel, username=result.username, domain=result.domain,
+        web_url=result.web_url, sftp_host=result.sftp_host,
+        registry=("updated" if (nic_status or {}).get("action") == "updated"
+                  else ("registered" if (nic_status or {}).get("action") == "created"
+                        else "not requested")),
+        dry_run=payload.dry_run,
+    )
 
     return {
         "success": True,
@@ -924,6 +940,12 @@ def suspend_account_now(
     if not result.get("success"):
         raise HTTPException(status_code=500, detail=result.get("message", "Suspension failed."))
 
+    activity.record_event(
+        activity.SUSPENDED,
+        f"Suspended {username} on {activity.panel_label(panel_norm)} for {reason}",
+        panel=panel_norm, username=username, domain=state.get("domain", ""),
+        reason=reason,
+    )
     return {"success": True, "message": result.get("message", ""),
             "panel": panel_norm, "username": username, "domain": state.get("domain", "")}
 
@@ -967,10 +989,27 @@ def activate_account_now(
                             detail=f"Account '{username}' was not found on {panel_norm}.")
     if not state["suspended"]:
         # Already up. Not an error, so a double-click cannot raise an alarm.
+        activity.record_event(
+            activity.ACTIVATED,
+            f"{username} on {activity.panel_label(panel_norm)} was already active",
+            outcome=activity.OK, panel=panel_norm, username=username,
+            domain=state.get("domain", ""), no_change=True,
+        )
         return {"success": True, "already_active": True, "panel": panel_norm,
                 "username": username, "domain": state.get("domain", ""),
                 "message": f"'{username}' is not suspended. Nothing to do."}
     if (state.get("reason") or "").strip().lower() != "billing":
+        # Recorded because it is the answer to "who tried to bring back an
+        # account suspended for abuse". A feed that only kept successes would
+        # hide exactly the event worth noticing.
+        activity.record_event(
+            activity.ACTIVATED,
+            f"REFUSED activating {username} on {activity.panel_label(panel_norm)} "
+            f"— suspended for '{state.get('reason') or 'unrecorded'}', not billing",
+            outcome=activity.REFUSED, panel=panel_norm, username=username,
+            domain=state.get("domain", ""),
+            suspended_for=state.get("reason", ""),
+        )
         raise HTTPException(
             status_code=409,
             detail=(f"Refusing to activate '{username}': it is suspended for "
@@ -983,9 +1022,31 @@ def activate_account_now(
     if not result.get("success"):
         raise HTTPException(status_code=500, detail=result.get("message", "Activation failed."))
 
+    activity.record_event(
+        activity.ACTIVATED,
+        f"Activated {username} on {activity.panel_label(panel_norm)} — billing paid",
+        panel=panel_norm, username=username, domain=state.get("domain", ""),
+        suspended_for=state.get("reason", ""),
+    )
     return {"success": True, "already_active": bool(result.get("already_active")),
             "message": result.get("message", ""),
             "panel": panel_norm, "username": username, "domain": state.get("domain", "")}
+
+
+@app.get("/api/v1/activity", dependencies=[Depends(require_api_token)])
+def list_activity(limit: int = 50, kind: Optional[str] = None):
+    """
+    What has been done, newest first.
+
+    The handover kit shows the result of the action you just took and the domain
+    queue shows what is still outstanding; neither survives a reload, and a
+    provisioning left no durable record at all. This is the cross-cutting feed
+    for "what have we done", and it does not replace the surrender, suspension
+    or domain-service trails, which remain the formal records.
+    """
+    kinds = [k.strip() for k in kind.split(",") if k.strip()] if kind else None
+    return {"events": activity.recent(limit=limit, kinds=kinds),
+            "counts": activity.counts()}
 
 
 @app.get("/api/v1/dns/records", dependencies=[Depends(require_api_token)])
@@ -1243,6 +1304,13 @@ def register_domain_service(payload: DomainServiceRequest):
         raise HTTPException(status_code=502,
                             detail=result.get("message", "nic.bt.bt rejected the registration."))
 
+    activity.record_event(
+        activity.DOMAIN_REGISTERED,
+        f"Registered {domain} on nic.bt.bt for {payload.customer_name} "
+        f"({'forwarding' if service == 'forwarding' else 'hosting'})",
+        domain=domain, customer=payload.customer_name, service=service,
+        forwarding_kind=kind, forwarding_target=target,
+    )
     entry = domain_service.record_registration(
         domain=domain,
         customer_name=payload.customer_name,
