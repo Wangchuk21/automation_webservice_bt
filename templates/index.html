@@ -551,6 +551,118 @@
       <div id="suspension-activatable" class="form-hint">Loading…</div>
     </section>
 
+    <!-- Domain service: register a domain, then hosting or forwarding.
+         Forwarding is done by BT staff by hand, so the card's job is to record
+         what was asked for and to check whether it has been done yet. -->
+    <section class="card form-card" id="domain-service">
+      <div class="card-header">
+        <div class="card-icon">🌐</div>
+        <div>
+          <h2 class="card-title">Domain Service</h2>
+          <h2 class="card-subtitle">Register a domain on nic.bt.bt, then hosting or forwarding</h2>
+        </div>
+      </div>
+
+      <div class="docs-grid">
+        <div class="docs-box">
+          <div class="docs-box-title">New domain</div>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="ds_domain" class="form-label">Domain <span class="required">*</span></label>
+              <div class="input-wrapper">
+                <input type="text" id="ds_domain" placeholder="e.g. wank.bt" autocomplete="off">
+              </div>
+            </div>
+            <div class="form-group">
+              <label for="ds_customer" class="form-label">Customer Name <span class="required">*</span></label>
+              <div class="input-wrapper">
+                <input type="text" id="ds_customer" placeholder="Registered owner" autocomplete="off">
+              </div>
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="ds_email" class="form-label">Customer Email <span class="required">*</span></label>
+              <div class="input-wrapper">
+                <input type="email" id="ds_email" placeholder="For the confirmation" autocomplete="off">
+              </div>
+              <span class="form-hint">Where the forwarding confirmation is sent, once verified.</span>
+            </div>
+            <div class="form-group">
+              <label for="ds_service" class="form-label">Service <span class="required">*</span></label>
+              <div class="input-wrapper">
+                <select id="ds_service">
+                  <option value="forwarding">Forwarding only</option>
+                  <option value="hosting">Hosting (register the domain, then use the form above)</option>
+                </select>
+              </div>
+              <span class="form-hint">With hosting, the domain is registered here and the account created above.</span>
+            </div>
+          </div>
+
+          <div id="ds_forwarding" class="ds-forwarding">
+            <div class="form-row">
+              <div class="form-group">
+                <label for="ds_kind" class="form-label">Forwarded by <span class="required">*</span></label>
+                <div class="input-wrapper">
+                  <select id="ds_kind">
+                    <option value="a">A record &mdash; to an IP address</option>
+                    <option value="nameserver">Name servers &mdash; delegate elsewhere</option>
+                  </select>
+                </div>
+                <span class="form-hint">This decides the question we check, so it has to be right.</span>
+              </div>
+              <div class="form-group">
+                <label for="ds_target" class="form-label">Pointed at <span class="required">*</span></label>
+                <div class="input-wrapper">
+                  <input type="text" id="ds_target" placeholder="e.g. 198.51.100.9, or ns1.host.com,ns2.host.com">
+                </div>
+                <span class="form-hint" id="ds_target_hint">The address the domain should resolve to.</span>
+              </div>
+            </div>
+            <div class="ds-note">
+              Forwarding is done by hand &mdash; nic.bt.bt holds no DNS or nameserver records,
+              and .bt delegation belongs to ns1/ns2.druknet.bt. This page records what you asked
+              for and checks whether it has been done. The customer is emailed only after the
+              check passes.
+            </div>
+          </div>
+        </div>
+
+        <div class="docs-box">
+          <div class="docs-box-title">nic.bt.bt details</div>
+          <p class="form-hint">
+            The 23 fields the registry requires. Anything left blank is derived the same way
+            the hosting form derives it.
+          </p>
+          <button type="button" class="btn btn-ghost btn-sm" id="ds-reg-refill">Reset to automatic</button>
+          <div id="ds-reg-form" class="nic-reg-form">
+            <p class="form-hint">Press &ldquo;Register domain&rdquo; to load the registry's field list.</p>
+          </div>
+          <div id="ds-reg-missing" class="nic-reg-missing" hidden></div>
+        </div>
+      </div>
+
+      <div class="form-actions">
+        <button type="button" class="btn btn-primary" id="btn-ds-register">
+          <span class="btn-icon">📝</span>
+          <span>Register domain on nic.bt.bt</span>
+        </button>
+      </div>
+      <div id="ds-result" class="surrender-result hidden"></div>
+    </section>
+
+    <!-- Domains waiting on someone to do the forwarding by hand. -->
+    <section class="card docs-card" id="domain-service-queue">
+      <h3 class="docs-title">⏳ Domains awaiting DNS</h3>
+      <p class="docs-desc">
+        Registered, with forwarding requested. Check each one, and notify the customer
+        only once the check confirms it &mdash; the email says the domain is live, so it is
+        only sent when that is true.
+      </p>
+      <div id="ds-queue">Loading&hellip;</div>
+    </section>
+
     <!-- Quick Documentation / CLI reference -->
     <section id="quick-docs" class="card docs-card">
       <h3 class="docs-title">⚡ Command Line Automation & API</h3>

@@ -427,9 +427,11 @@ document.addEventListener("DOMContentLoaded", () => {
 // and any of them can be overridden.
 // ========================================================
 
+// Shared by every instance: the spec, the extension list and the derivation
+// rules. Fetched once and reused, because both the hosting form and the domain
+// service card render from the same 23 fields and must not drift apart.
 let REG_SPEC = null;          // the 23-field spec from the API
 let REG_EXTENSIONS = null;    // the registry's own extension dropdown
-const REG_TOUCHED = new Set();   // fields the operator has edited by hand
 
 const REG_SOURCE_LABEL = {
   customer: "from customer",
@@ -459,222 +461,225 @@ function splitDomainExt(domain, offered) {
   return [full, ".bt"];
 }
 
-function regInput(name) {
-  return document.querySelector(`[data-reg="${name}"]`);
-}
-
-// The value a field takes when the operator has not overridden it. This mirrors
-// build_registry_payload in nic_client.py: a derived field follows its parent,
-// a Bhutan Telecom default is used where the registry needs one, and the two
-// computed fields come from the domain.
-function regFallback(name, field) {
-  switch (name) {
-    case "domain": {
-      const [base] = splitDomainExt(currentDomain(), REG_EXTENSIONS || []);
-      return base;
-    }
-    case "ext": {
-      const [, ext] = splitDomainExt(currentDomain(), REG_EXTENSIONS || []);
-      return ext;
-    }
-    case "reg_renewal": {
-      const box = document.getElementById("renewal_date");
-      return (box && box.value) || "";
-    }
-    default: break;
-  }
-  if (field.source === "derived" && field.derived_from) {
-    return regFallback(field.derived_from, regField(field.derived_from) || {});
-  }
-  if (field.source === "default") return field.default || "";
-  return REG_PLACEHOLDER[name] || "";
-}
-
 function regField(name) {
   return (REG_SPEC && REG_SPEC.fields || []).find((f) => f.name === name);
 }
 
-function currentDomain() {
-  const el = document.getElementById("domain");
-  return ((el && el.value) || "").trim();
-}
+/**
+ * One instance of the nic.bt.bt field form.
+ *
+ * It is an object rather than a set of page-wide functions because there are now
+ * two of these on the page -- one inside the hosting form, one in the domain
+ * service card -- and the previous version found its inputs with a document-wide
+ * querySelector, so two copies would have silently read each other's fields.
+ * Everything is now scoped to this.root.
+ */
+class RegistryForm {
+  /**
+   * @param {object} opts
+   *   root        - element the fields are rendered into
+   *   missingEl   - element for the "these are empty" warning
+   *   domainInput - element the computed domain/ext fields follow
+   */
+  constructor(opts) {
+    this.root = opts.root;
+    this.missingEl = opts.missingEl || null;
+    this.domainInput = opts.domainInput || null;
+    this.touched = new Set();
+    this.loaded = false;
+  }
 
-// Repaint every field the operator has not touched. Called whenever the domain
-// or a parent field changes, so the copied contacts stay in step.
-function syncRegistryFields() {
-  if (!REG_SPEC) return;
-  REG_SPEC.fields.forEach((f) => {
-    if (REG_TOUCHED.has(f.name)) return;
-    const el = regInput(f.name);
-    if (!el) return;
-    const value = regFallback(f.name, f);
-    if (el.tagName === "SELECT") {
-      el.value = value;
-      if (value && el.value !== value) {
-        // The extension list could not be read, so this value is not on offer.
-        el.insertBefore(new Option(`${value} (not on offer)`, value), el.firstChild);
+  input(name) {
+    return this.root ? this.root.querySelector(`[data-reg="${name}"]`) : null;
+  }
+
+  currentDomain() {
+    return ((this.domainInput && this.domainInput.value) || "").trim();
+  }
+
+  // The value a field takes when the operator has not overridden it. Mirrors
+  // build_registry_payload in nic_client.py: a derived field follows its parent,
+  // a Bhutan Telecom default is used where the registry needs one, and the two
+  // computed fields come from the domain.
+  fallback(name, field) {
+    switch (name) {
+      case "domain": return splitDomainExt(this.currentDomain(), REG_EXTENSIONS || [])[0];
+      case "ext": return splitDomainExt(this.currentDomain(), REG_EXTENSIONS || [])[1];
+      case "reg_renewal": {
+        const box = this.input("reg_renewal");
+        return (box && box.value) || "";
+      }
+      default: break;
+    }
+    if (field.source === "derived" && field.derived_from) {
+      return this.fallback(field.derived_from, regField(field.derived_from) || {});
+    }
+    if (field.source === "default") return field.default || "";
+    return REG_PLACEHOLDER[name] || "";
+  }
+
+  // Repaint every field the operator has not touched.
+  sync() {
+    if (!REG_SPEC || !this.loaded) return;
+    REG_SPEC.fields.forEach((f) => {
+      if (this.touched.has(f.name)) return;
+      const el = this.input(f.name);
+      if (!el) return;
+      const value = this.fallback(f.name, f);
+      if (el.tagName === "SELECT") {
+        el.value = value;
+        if (value && el.value !== value) {
+          // The extension list could not be read, so this value is not on offer.
+          el.insertBefore(new Option(`${value} (not on offer)`, value), el.firstChild);
+          el.value = value;
+        }
+      } else {
         el.value = value;
       }
-    } else {
-      el.value = value;
+      const group = el.closest(".nic-reg-field");
+      if (group) group.classList.toggle("is-touched", this.touched.has(f.name));
+    });
+    this.renderMissing();
+  }
+
+  // The resolved values, as they will be submitted. Blank entries are omitted
+  // so the server applies its own fallback rather than being handed "".
+  values() {
+    const out = {};
+    if (!REG_SPEC) return out;
+    REG_SPEC.fields.forEach((f) => {
+      const el = this.input(f.name);
+      if (!el) return;
+      const v = (el.value || "").trim();
+      if (v) out[f.name] = v;
+    });
+    return out;
+  }
+
+  // Required fields left empty. nic.bt.bt rejects the whole submission if any of
+  // them is blank, so this is checked before anything is created.
+  missing() {
+    if (!REG_SPEC) return [];
+    return REG_SPEC.fields
+      .filter((f) => f.required)
+      .filter((f) => {
+        const el = this.input(f.name);
+        return !el || !(el.value || "").trim();
+      })
+      .map((f) => f.name);
+  }
+
+  renderMissing() {
+    if (!this.missingEl) return;
+    const missing = this.missing();
+    this.missingEl.hidden = missing.length === 0;
+    this.missingEl.textContent = missing.length
+      ? `Still empty — nic.bt.bt will reject the submission: ${missing.join(", ")}`
+      : "";
+  }
+
+  async load() {
+    if (this.loaded) return;
+    const res = await fetch("/api/v1/nic/field-spec", { headers: apiHeaders() });
+    if (!res.ok) {
+      this.root.innerHTML =
+        `<p class="form-hint">Could not load the registry's field list (HTTP ${res.status}).</p>`;
+      return;
     }
-    const group = el.closest(".nic-reg-field");
-    if (group) group.classList.toggle("is-touched", REG_TOUCHED.has(f.name));
-  });
-  renderRegistryMissing();
-}
+    REG_SPEC = await res.json();
 
-// The resolved values, as the payload will be submitted. Blank entries are
-// omitted so the server applies its own fallback rather than being handed "".
-function registryFieldValues() {
-  const out = {};
-  if (!REG_SPEC) return out;
-  REG_SPEC.fields.forEach((f) => {
-    const el = regInput(f.name);
-    if (!el) return;
-    const v = (el.value || "").trim();
-    if (v) out[f.name] = v;
-  });
-  return out;
-}
-
-// Required fields left empty. nic.bt.bt rejects the whole submission if any of
-// them is blank, so this is checked before the hosting account is created rather
-// than after.
-function missingRegistryFields() {
-  if (!REG_SPEC) return [];
-  return REG_SPEC.fields
-    .filter((f) => f.required)
-    .filter((f) => {
-      const el = regInput(f.name);
-      return !el || !(el.value || "").trim();
-    })
-    .map((f) => f.name);
-}
-
-function renderRegistryMissing() {
-  const box = document.getElementById("nic-reg-missing");
-  if (!box || !REG_SPEC) return;
-  const missing = missingRegistryFields();
-  box.hidden = missing.length === 0;
-  box.textContent = missing.length
-    ? `Still empty — nic.bt.bt will reject the submission: ${missing.join(", ")}`
-    : "";
-}
-
-async function loadRegistryForm() {
-  const box = document.getElementById("nic-reg-form");
-  if (!box) return;
-
-  const specRes = await fetch("/api/v1/nic/field-spec", { headers: apiHeaders() });
-  if (!specRes.ok) {
-    box.innerHTML = `<p class="form-hint">Could not load the registry's field list (HTTP ${specRes.status}).</p>`;
-    return;
-  }
-  REG_SPEC = await specRes.json();
-
-  // The extension list is the registry's own dropdown, not a copy of it.
-  try {
-    const extRes = await fetch("/api/v1/nic/extensions", { headers: apiHeaders() });
-    const data = extRes.ok ? await extRes.json() : {};
-    REG_EXTENSIONS = (data.extensions || []).filter(Boolean);
-  } catch (e) {
-    REG_EXTENSIONS = [];
-  }
-
-  const groups = (REG_SPEC.groups || []).map(([key, label]) => {
-    const fields = REG_SPEC.fields.filter((f) => f.group === key);
-    if (!fields.length) return "";
-    const rows = fields.map((f) => regRow(f)).join("");
-    return `<div class="nic-reg-group">
-              <h4 class="nic-reg-group-title">${esc(label)}
-                <span class="nic-reg-group-count">${fields.length}</span>
-              </h4>
-              <div class="nic-reg-grid">${rows}</div>
-            </div>`;
-  }).join("");
-
-  box.innerHTML = groups;
-  box.addEventListener("input", onRegistryEdit);
-  box.addEventListener("change", onRegistryEdit);
-  syncRegistryFields();
-}
-
-function regRow(f) {
-  const hint = REG_SOURCE_LABEL[f.source] || f.source;
-  const req = f.required ? ' <span class="required">*</span>' : "";
-  let control;
-  if (f.name === "ext") {
-    const opts = (REG_EXTENSIONS || []).map((e) => `<option value="${esc(e)}">${esc(e)}</option>`);
-    control = `<select data-reg="ext" name="ext">
-        ${opts.length ? opts.join("") : '<option value="">Unavailable</option>'}
-      </select>`;
-  } else if (f.name === "reg_renewal") {
-    control = `<input type="date" data-reg="reg_renewal" name="reg_renewal" id="renewal_date">`;
-  } else {
-    const type = f.name === "email" ? "email" : "text";
-    control = `<input type="${type}" data-reg="${esc(f.name)}" name="${esc(f.name)}"
-        placeholder="${esc(f.default || "e.g. " + (f.label || "").toLowerCase())}">`;
-  }
-  return `<div class="form-group nic-reg-field">
-      <label class="form-label" for="reg-${esc(f.name)}">${esc(f.label)}${req}</label>
-      <div class="input-wrapper">${control}</div>
-      <span class="form-hint nic-reg-source" data-source="${esc(f.source)}">
-        ${f.source === "derived" ? `copied from ${esc(f.derived_from)}` : esc(hint)}
-      </span>
-    </div>`;
-}
-
-// An edit to one field can change fields copied from it, so re-derive the rest.
-function onRegistryEdit(e) {
-  const el = e.target;
-  const name = el && el.getAttribute && el.getAttribute("data-reg");
-  if (name) REG_TOUCHED.add(name);
-  syncRegistryFields();
-}
-
-document.addEventListener("DOMContentLoaded", () => {
-  // Load the registry's field list only when the operator asks for a registry
-  // push, so a normal hosting provision does not pay for it.
-  const nicToggle = document.getElementById("register_nic");
-  const nicFields = document.getElementById("nic-fields");
-  if (nicToggle && nicFields) {
-    let loaded = false;
-    const sync = () => {
-      nicFields.hidden = !nicToggle.checked;
-      if (nicToggle.checked && !loaded) {
-        loaded = true;
-        loadRegistryForm();
+    // The extension list is the registry's own dropdown, not a copy of it.
+    if (!REG_EXTENSIONS) {
+      try {
+        const extRes = await fetch("/api/v1/nic/extensions", { headers: apiHeaders() });
+        const data = extRes.ok ? await extRes.json() : {};
+        REG_EXTENSIONS = (data.extensions || []).filter(Boolean);
+      } catch (e) {
+        REG_EXTENSIONS = [];
       }
-      if (nicToggle.checked) syncRegistryFields();
-    };
-    nicToggle.addEventListener("change", sync);
-    sync();
+    }
+
+    this.root.innerHTML = (REG_SPEC.groups || []).map(([key, label]) => {
+      const fields = REG_SPEC.fields.filter((f) => f.group === key);
+      if (!fields.length) return "";
+      return `<div class="nic-reg-group">
+                <h4 class="nic-reg-group-title">${esc(label)}
+                  <span class="nic-reg-group-count">${fields.length}</span>
+                </h4>
+                <div class="nic-reg-grid">${fields.map((f) => this.row(f)).join("")}</div>
+              </div>`;
+    }).join("");
+
+    // An edit to one field can change fields copied from it, so re-derive the rest.
+    this.root.addEventListener("input", (e) => this.onEdit(e));
+    this.root.addEventListener("change", (e) => this.onEdit(e));
+    this.root.addEventListener("click", (e) => this.onMirrorClick(e));
+    this.loaded = true;
+    this.sync();
   }
 
-  // The domain drives the two computed fields, the DNS pre-check and anything
-  // copied from them.
-  const domain = document.getElementById("domain");
-  if (domain) {
-    domain.addEventListener("input", () => { syncRegistryFields(); scheduleDnsPrecheck(); });
-    domain.addEventListener("change", () => { syncRegistryFields(); scheduleDnsPrecheck(); });
+  row(f) {
+    const req = f.required ? ' <span class="required">*</span>' : "";
+    let control;
+    if (f.name === "ext") {
+      const opts = (REG_EXTENSIONS || []).map(
+        (e) => `<option value="${esc(e)}">${esc(e)}</option>`);
+      control = `<select data-reg="ext" name="ext">
+          ${opts.length ? opts.join("") : '<option value="">Unavailable</option>'}
+        </select>`;
+    } else if (f.name === "reg_renewal") {
+      control = `<input type="date" data-reg="reg_renewal" name="reg_renewal">`;
+    } else {
+      const type = f.name === "email" ? "email" : "text";
+      control = `<input type="${type}" data-reg="${esc(f.name)}" name="${esc(f.name)}"
+          placeholder="${esc(f.default || "e.g. " + (f.label || "").toLowerCase())}">`;
+    }
+    return `<div class="form-group nic-reg-field">
+        <label class="form-label">${esc(f.label)}${req}</label>
+        <div class="input-wrapper">${control}</div>
+        <span class="form-hint nic-reg-source" data-source="${esc(f.source)}">
+          ${f.source === "derived" ? `copied from ${esc(f.derived_from)}` : esc(REG_SOURCE_LABEL[f.source] || f.source)}
+        </span>
+      </div>`;
   }
 
-  // Changing the panel changes which address counts as "ours".
-  document.querySelectorAll('input[name="panel"]').forEach((radio) => {
-    radio.addEventListener("change", () => {
-      if (LAST_DNS.result) scheduleDnsPrecheck();
-    });
-  });
-
-  const refill = document.getElementById("nic-reg-refill");
-  if (refill) {
-    refill.addEventListener("click", () => {
-      REG_TOUCHED.clear();
-      syncRegistryFields();
-    });
+  onEdit(e) {
+    const el = e.target;
+    const name = el && el.getAttribute && el.getAttribute("data-reg");
+    if (name) this.touched.add(name);
+    this.sync();
   }
-});
+
+  // The domain name is derived rather than typed, so clicking it unlocks it and
+  // marks it an override. Deliberate, and reversible by Reset.
+  onMirrorClick(e) {
+    const el = e.target;
+    if (!el || !el.classList || !el.classList.contains("nic-reg-mirror")) return;
+    el.readOnly = false;
+    el.classList.remove("nic-reg-mirror");
+    el.title = "";
+    this.touched.add("domain");
+    el.focus();
+    el.select();
+    this.sync();
+  }
+
+  reset() {
+    this.touched.clear();
+    const mirror = this.root.querySelector('[data-reg="domain"]');
+    if (mirror) {
+      mirror.readOnly = true;
+      mirror.classList.add("nic-reg-mirror");
+    }
+    this.sync();
+  }
+}
+
+// The two instances. The hosting form's registry block, and the domain service
+// card. They share the spec and the extension list but keep their own field
+// values, because they are for different customers.
+let hostingRegistry = null;
+let domainRegistry = null;
 
 // ========================================================
 // FRONTEND INTERACTIONS - AUTOMATION WEBSERVICE BT
@@ -711,9 +716,42 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
-  // The nic.bt.bt toggle is wired once, in the registry form section above,
-  // which also loads the field list. Wiring it again here would hide the block
-  // independently of the load and call a function that no longer exists.
+  // The nic.bt.bt registry block inside the hosting form. Loaded on first use
+  // rather than at page load, so a plain hosting provision does not pay for it.
+  const nicToggle = document.getElementById("register_nic");
+  const nicFields = document.getElementById("nic-fields");
+  if (nicToggle && nicFields) {
+    hostingRegistry = new RegistryForm({
+      root: document.getElementById("nic-reg-form"),
+      missingEl: document.getElementById("nic-reg-missing"),
+      domainInput: document.getElementById("domain"),
+    });
+    const sync = () => {
+      nicFields.hidden = !nicToggle.checked;
+      if (nicToggle.checked) hostingRegistry.load();
+      if (nicToggle.checked) hostingRegistry.sync();
+    };
+    nicToggle.addEventListener("change", sync);
+    sync();
+  }
+
+  const refill = document.getElementById("nic-reg-refill");
+  if (refill) refill.addEventListener("click", () => hostingRegistry && hostingRegistry.reset());
+
+  // The domain drives the registry block and the DNS pre-check.
+  const domain = document.getElementById("domain");
+  if (domain) {
+    domain.addEventListener("input", () => {
+      if (hostingRegistry) hostingRegistry.sync();
+      scheduleDnsPrecheck();
+    });
+    domain.addEventListener("change", () => {
+      if (hostingRegistry) hostingRegistry.sync();
+      scheduleDnsPrecheck();
+    });
+  }
+
+  initDomainServices();
 });
 
 // The token to send as X-API-Token, or null when the API is unauthenticated.
@@ -903,24 +941,25 @@ async function checkDnsAfterProvisioning(domain, panel) {
 
 function scheduleDnsPrecheck() {
   clearTimeout(dnsPrecheckTimer);
-  const domain = currentDomain();
-  const box = document.getElementById("dns-precheck");
-  if (!box) return;
+  const box = document.getElementById("domain");
+  const domain = ((box && box.value) || "").trim();
+  const out = document.getElementById("dns-precheck");
+  if (!out) return;
 
   if (!domain || domain.indexOf(".") < 0) {
-    box.classList.add("hidden");
-    box.innerHTML = "";
+    out.classList.add("hidden");
+    out.innerHTML = "";
     LAST_DNS = { domain: null, result: null };
     return;
   }
 
   // "Not a domain yet" is not a finding; say nothing until it could resolve.
-  box.classList.remove("hidden");
-  box.className = "res-dns-status";
-  box.innerHTML = '<span class="form-hint">Checking DNS&hellip;</span>';
+  out.classList.remove("hidden");
+  out.className = "res-dns-status";
+  out.innerHTML = '<span class="form-hint">Checking DNS&hellip;</span>';
 
   // Debounced: a lookup per keystroke would hammer the resolver for no gain.
-  dnsPrecheckTimer = setTimeout(() => runDnsPrecheck(domain, box), 700);
+  dnsPrecheckTimer = setTimeout(() => runDnsPrecheck(domain, out), 700);
 }
 
 async function runDnsPrecheck(domain, box) {
@@ -930,7 +969,8 @@ async function runDnsPrecheck(domain, box) {
   try {
     const result = await runDnsCheck(domain, panel);
     // A newer keystroke may have moved on while this was in flight.
-    if (seq !== dnsPrecheckSeq || currentDomain() !== domain) return;
+    const box = document.getElementById("domain");
+    if (seq !== dnsPrecheckSeq || ((box && box.value) || "").trim() !== domain) return;
     renderDns(box, result, true);
     LAST_DNS = { domain: domain, result: result };
   } catch (e) {
@@ -1109,7 +1149,7 @@ async function handleProvisionSubmit(e) {
   const registerNic = document.getElementById("register_nic") ? document.getElementById("register_nic").checked : false;
   // All 23 registry fields, as the operator left them. Blank ones are omitted so
   // the server applies the same fallback it always has.
-  const nicFields = registerNic ? registryFieldValues() : {};
+  const nicFields = (registerNic && hostingRegistry) ? hostingRegistry.values() : {};
   const nicExt = nicFields.ext || null;
 
   if (!domain) {
@@ -1121,10 +1161,10 @@ async function handleProvisionSubmit(e) {
   // the hosting account is created first, so a rejection from the registry would
   // otherwise leave a half-finished provisioning behind.
   if (registerNic) {
-    const missing = missingRegistryFields();
+    const missing = hostingRegistry ? hostingRegistry.missing() : [];
     if (missing.length) {
       showToast(`nic.bt.bt still needs: ${missing.join(", ")}`, "error");
-      const el = regInput(missing[0]);
+      const el = hostingRegistry && hostingRegistry.input(missing[0]);
       if (el) { el.focus(); el.style.borderColor = "var(--accent-rose)"; }
       return;
     }
@@ -1270,5 +1310,240 @@ function copyFullHandover() {
   const rawBox = document.getElementById("res-handover-raw");
   if (rawBox && rawBox.value) {
     copyToClipboard(rawBox.value, "Copied full handover letter for customer!");
+  }
+}
+
+// ========================================================
+// DOMAIN SERVICE
+// Register a domain on nic.bt.bt, then either hosting or forwarding.
+//
+// Forwarding is done by BT staff by hand, in systems this service does not
+// touch: nic.bt.bt holds no DNS or nameserver records, and .bt delegation
+// belongs to ns1/ns2.druknet.bt. So the two things this page does are record
+// what was asked for, and check whether it has actually been done. The customer
+// is told only after the check passes, because the email asserts something
+// factual about the public internet.
+// ========================================================
+
+const DS_STATUS_LABEL = {
+  registered: "registered",
+  awaiting_dns: "awaiting DNS",
+  verified: "verified, not yet told",
+  notified: "customer notified",
+};
+
+function initDomainServices() {
+  const root = document.getElementById("domain-service");
+  if (!root) return;
+
+  domainRegistry = new RegistryForm({
+    root: document.getElementById("ds-reg-form"),
+    missingEl: document.getElementById("ds-reg-missing"),
+    domainInput: document.getElementById("ds_domain"),
+  });
+
+  const kind = document.getElementById("ds_kind");
+  const target = document.getElementById("ds_target");
+  const hint = document.getElementById("ds_target_hint");
+  const forwarding = document.getElementById("ds_forwarding");
+  const service = document.getElementById("ds_service");
+
+  const syncKind = () => {
+    const isNameserver = kind.value === "nameserver";
+    target.placeholder = isNameserver
+      ? "e.g. ns1.host.com,ns2.host.com" : "e.g. 198.51.100.9";
+    hint.textContent = isNameserver
+      ? "The name servers the domain should be delegated to. Comma separated."
+      : "The address the domain should resolve to.";
+    if (isNameserver) {
+      // An address left in here from switching back would verify against the
+      // wrong thing and quietly never match.
+      if (target.value && /^\d{1,3}(\.\d{1,3}){3}$/.test(target.value.trim())) {
+        target.value = "";
+      }
+    } else if (target.value && !/^\d{1,3}(\.\d{1,3}){3}$/.test(target.value.trim())) {
+      target.value = "";
+    }
+  };
+  kind.addEventListener("change", syncKind);
+  syncKind();
+
+  // Forwarding details only matter for forwarding.
+  const syncService = () => { forwarding.hidden = service.value !== "forwarding"; };
+  service.addEventListener("change", syncService);
+  syncService();
+
+  document.getElementById("btn-ds-register")
+    .addEventListener("click", registerDomainService);
+  document.getElementById("ds-reg-refill")
+    .addEventListener("click", () => domainRegistry && domainRegistry.reset());
+  document.getElementById("ds_domain").addEventListener("input", () => {
+    domainRegistry.load();
+    domainRegistry.sync();
+  });
+
+  loadDomainServiceQueue();
+}
+
+async function registerDomainService() {
+  const domain = document.getElementById("ds_domain").value.trim().toLowerCase();
+  const customer = document.getElementById("ds_customer").value.trim();
+  const email = document.getElementById("ds_email").value.trim();
+  const service = document.getElementById("ds_service").value;
+  const kind = document.getElementById("ds_kind").value;
+  const target = document.getElementById("ds_target").value.trim();
+  const out = document.getElementById("ds-result");
+
+  const fail = (msg) => {
+    out.className = "surrender-result surrender-step-fail";
+    out.classList.remove("hidden");
+    out.innerHTML = `<h4>Cannot register</h4><p>${esc(msg)}</p>`;
+  };
+
+  if (!domain) return fail("Enter a domain.");
+  if (!customer) return fail("Enter the registered owner's name.");
+  if (!email || email.indexOf("@") < 0) return fail("Enter a valid customer email.");
+  if (service === "forwarding" && !target) {
+    return fail("Enter what the domain is pointed at, so the forwarding can be " +
+                "checked later. Without it there is nothing to verify against.");
+  }
+
+  const missing = domainRegistry.missing();
+  if (missing.length) {
+    out.className = "surrender-result surrender-step-fail";
+    out.classList.remove("hidden");
+    out.innerHTML = `<h4>nic.bt.bt needs more</h4><p>${esc(missing.join(", "))}</p>`;
+    return;
+  }
+
+  out.className = "surrender-result";
+  out.classList.remove("hidden");
+  out.innerHTML = '<span class="form-hint">Registering on nic.bt.bt…</span>';
+
+  try {
+    const res = await fetch("/api/v1/domain-services/register", {
+      method: "POST",
+      headers: apiHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({
+        domain, customer_name: customer, email, service,
+        forwarding_kind: service === "forwarding" ? kind : null,
+        forwarding_target: service === "forwarding" ? target : null,
+        nic_fields: domainRegistry.values(),
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      out.className = "surrender-result surrender-step-fail";
+      out.innerHTML = `<h4>Registration failed</h4><p>${esc(describeApiError(data, res.status))}</p>`;
+      return;
+    }
+    out.className = "surrender-result surrender-step-ok";
+    out.innerHTML = `<h4>Registered on nic.bt.bt</h4><p>${esc(data.nic.message || "")}</p>`
+      + (service === "forwarding"
+        ? `<p>It is now waiting on the forwarding being done. It will appear under
+             <em>Domains awaiting DNS</em> — notify the customer once the check passes.</p>`
+        : `<p>Now create the hosting account from the provisioning form above.</p>`);
+    showToast(`${domain} registered`, "success");
+    loadDomainServiceQueue();
+  } catch (e) {
+    out.className = "surrender-result surrender-step-fail";
+    out.innerHTML = `<h4>Failed</h4><p>${esc(e.message)}</p>`;
+  }
+}
+
+async function loadDomainServiceQueue() {
+  const box = document.getElementById("ds-queue");
+  if (!box) return;
+  try {
+    const res = await fetch("/api/v1/domain-services", { headers: apiHeaders() });
+    if (!res.ok) { box.textContent = `Unavailable (HTTP ${res.status}).`; return; }
+    const data = await res.json();
+    const rows = data.services || [];
+    const waiting = rows.filter((r) => r.status === "awaiting_dns" || r.status === "verified");
+    const done = rows.filter((r) => r.status === "notified");
+
+    if (!rows.length) {
+      box.innerHTML = '<span class="form-hint">Nothing yet — register a domain above.</span>';
+      return;
+    }
+
+    const row = (r, actionable) => `<tr>
+      <td><strong>${esc(r.domain)}</strong></td>
+      <td>${esc(r.customer_name || "-")}</td>
+      <td>${esc(r.forwarding_kind === "nameserver" ? "name servers" : "A record")}</td>
+      <td><code>${esc(r.forwarding_target || "-")}</code></td>
+      <td>${r.last_check_status
+            ? `<span class="pill ${r.last_check_status === "forwarded" ? "pill-done" : "pill-pending"}">${esc(r.last_check_status)}</span>`
+            : '<span class="pill pill-pending">not checked</span>'}</td>
+      <td>${actionable
+            ? `<button class="btn btn-secondary btn-sm" onclick="verifyDomain('${esc(r.domain)}')">Check</button>
+               ${r.status === "verified"
+                 ? ` <button class="btn btn-primary btn-sm" onclick="notifyDomain('${esc(r.domain)}')">Notify customer</button>`
+                 : ""}`
+            : '<span class="muted">told</span>'}</td>
+    </tr>`;
+
+    box.innerHTML = `<table class="surrender-table">
+      <thead><tr><th>Domain</th><th>Customer</th><th>By</th><th>Pointed at</th>
+        <th>DNS check</th><th>Action</th></tr></thead>
+      <tbody>${waiting.map((r) => row(r, true)).join("")}${done.map((r) => row(r, false)).join("")}</tbody>
+      </table>` + (done.length
+        ? `<p class="form-hint">${done.length} already notified — shown for the record.</p>`
+        : "") + (waiting.length
+          ? `<p class="form-hint">${waiting.length} waiting. The customer is only emailed
+             after a check confirms the forwarding; a domain that is not forwarded yet
+             cannot be notified.</p>`
+          : "");
+  } catch (e) {
+    box.textContent = e.message;
+  }
+}
+
+async function verifyDomain(domain) {
+  try {
+    const res = await fetch("/api/v1/domain-services/verify", {
+      method: "POST",
+      headers: apiHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ domain }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      showToast((data && data.detail) || "Check failed", "error");
+    } else if (data.check.status === "forwarded") {
+      showToast(`${domain} is forwarded — you can notify the customer`, "success");
+    } else {
+      showToast(data.check.message, "error");
+    }
+    await loadDomainServiceQueue();
+  } catch (e) {
+    showToast(e.message, "error");
+  }
+}
+
+// Tell the customer. The server refuses unless a check has already confirmed the
+// forwarding, so the button is not the only thing standing between a customer
+// and a false claim -- that is enforced on the server, not here.
+async function notifyDomain(domain) {
+  if (!window.confirm(
+    `Email ${domain}'s customer to say their domain is forwarded?\\n\\n`
+    + `This is the only outward-facing step, so it is worth reading the check result `
+    + `above first. If the domain has not been forwarded, the server will refuse.`
+  )) return;
+  try {
+    const res = await fetch("/api/v1/domain-services/notify", {
+      method: "POST",
+      headers: apiHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ domain }),
+    });
+    const data = await res.json();
+    if (res.ok) {
+      showToast(data.message || "Customer notified", "success");
+    } else {
+      const msg = (data && data.detail) || `HTTP ${res.status}`;
+      showToast(msg, "error");
+    }
+    await loadDomainServiceQueue();
+  } catch (e) {
+    showToast(e.message, "error");
   }
 }

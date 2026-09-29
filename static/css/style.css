@@ -1493,3 +1493,29 @@ select.custom-select:focus {
   color: var(--text-dim);
   line-height: 1.5;
 }
+
+/* ========================================================
+   DOMAIN SERVICE
+   Register a domain, then hosting or forwarding. The queue
+   below it is the part that matters: forwarding is done by
+   hand, so somebody has to come back and check.
+   ======================================================== */
+
+.ds-forwarding {
+  margin-top: 4px;
+  padding: 12px 14px;
+  border: 1px dashed var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+}
+.ds-note {
+  margin-top: 10px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text-dim);
+  border-left: 2px solid var(--primary);
+  padding-left: 10px;
+}
+#ds-reg-form { margin-top: 12px; max-height: 520px; overflow-y: auto; }
+#ds-reg-form .nic-reg-grid { grid-template-columns: 1fr; }
+#ds-reg-missing { margin-top: 10px; }

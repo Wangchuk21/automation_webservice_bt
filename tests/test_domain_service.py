@@ -288,3 +288,82 @@ class TestTheEmailSaysWhatWasVerified(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestTwoRegistryFormsCanCoexist(unittest.TestCase):
+    """
+    The nic.bt.bt field form now appears twice on the page: once inside the
+    hosting form, once in the domain service card. It used to be a set of
+    page-wide functions that found its inputs with document.querySelector, so
+    two copies would have found each other's fields and quietly submitted the
+    wrong customer's details to the national registry.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        root = Path(__file__).resolve().parent.parent
+        cls.js = (root / "static" / "js" / "app.js").read_text()
+        cls.html = (root / "templates" / "index.html").read_text()
+
+    def test_lookups_are_scoped_to_the_instance(self):
+        self.assertTrue("this.root.querySelector" in self.js)
+        self.assertIn("class RegistryForm", self.js)
+
+    def test_no_page_wide_lookup_of_a_registry_field(self):
+        """A document-wide query would be the exact bug this refactor fixed."""
+        for line in self.js.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("document.querySelector") and "data-reg" in stripped:
+                self.fail(f"registry field found page-wide: {stripped}")
+
+    def test_both_forms_are_wired_to_their_own_containers(self):
+        self.assertTrue('root: document.getElementById("nic-reg-form")' in self.js)
+        self.assertTrue('root: document.getElementById("ds-reg-form")' in self.js)
+        self.assertTrue('domainInput: document.getElementById("domain")' in self.js)
+        self.assertTrue('domainInput: document.getElementById("ds_domain")' in self.js)
+
+    def test_the_spec_is_shared_so_they_cannot_drift(self):
+        self.assertTrue("let REG_SPEC = null" in self.js)
+        self.assertTrue("let REG_EXTENSIONS = null" in self.js)
+        self.assertTrue("if (!REG_EXTENSIONS)" in self.js,
+                        "the extension list should be fetched once, not per form")
+
+    def test_the_submit_path_uses_the_hosting_instance(self):
+        self.assertTrue("hostingRegistry.values()" in self.js)
+        self.assertTrue("hostingRegistry.missing()" in self.js)
+
+    def test_the_domain_service_sends_its_own_values(self):
+        self.assertTrue("nic_fields: domainRegistry.values()" in self.js)
+
+
+class TestTheQueueOffersTheRightActions(unittest.TestCase):
+    """
+    The notify button is a convenience, not the control. The server refuses
+    unless a check has passed, and the page should not offer a button that can
+    only ever fail.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.js = (Path(__file__).resolve().parent.parent
+                  / "static" / "js" / "app.js").read_text()
+
+    def test_notify_is_only_offered_once_verified(self):
+        self.assertTrue('r.status === "verified"' in self.js)
+
+    def test_a_check_is_offered_while_waiting(self):
+        self.assertTrue("verifyDomain(" in self.js)
+
+    def test_notified_rows_are_shown_without_an_action(self):
+        self.assertTrue('r.status === "notified"' in self.js)
+
+    def test_the_button_defers_to_the_server(self):
+        """It asks for confirmation and says the server will refuse; it does not
+        pretend the button is the thing enforcing it."""
+        self.assertTrue("window.confirm" in self.js)
+        self.assertTrue("the server will refuse" in self.js)
+
+    def test_switching_forwarding_kind_clears_a_mismatched_target(self):
+        """An address left in the box after switching to name servers would be
+        compared against a delegation and quietly never match."""
+        self.assertTrue("syncKind" in self.js)

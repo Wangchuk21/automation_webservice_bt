@@ -174,9 +174,10 @@ class TestDashboardAgreesWithTheServer(unittest.TestCase):
         self.assertIn('replace(', body)
 
     def test_a_manual_choice_is_not_overridden_by_the_domain(self):
-        """The generated fields must respect a deliberate pick too."""
-        self.assertTrue("REG_TOUCHED" in self.js)
-        self.assertTrue("if (REG_TOUCHED.has(f.name)) return;" in self.js)
+        """The generated fields must respect a deliberate pick too. Tracked
+        per instance now, since there are two of these forms on the page."""
+        self.assertTrue("this.touched" in self.js)
+        self.assertTrue("if (this.touched.has(f.name)) return;" in self.js)
 
 
 class TestExtensionsEndpoint(unittest.TestCase):
@@ -245,7 +246,7 @@ class TestRegistryFieldsAreNotDuplicated(unittest.TestCase):
                              f"{name} is written into the template by hand")
 
     def test_the_form_submits_the_whole_field_set(self):
-        self.assertIn("registryFieldValues()", self.js)
+        self.assertIn("hostingRegistry.values()", self.js)
         self.assertIn("nic_fields: nicFields", self.js)
 
     def test_the_reference_page_does_not_re_capture_the_fields(self):
@@ -277,9 +278,8 @@ class TestRegistryFieldsAreNotDuplicated(unittest.TestCase):
     def test_edited_fields_are_not_overwritten(self):
         """A field the operator changed by hand must survive a later domain
         edit, or the override silently reverts."""
-        self.assertTrue("REG_TOUCHED" in self.js)
-        self.assertTrue("if (REG_TOUCHED.has(f.name)) return;" in self.js)
-        self.assertTrue("REG_TOUCHED.clear()" in self.js)
+        self.assertTrue("this.touched.has(f.name)" in self.js)
+        self.assertTrue("this.touched.clear()" in self.js)
 
 
 class TestRegistryFieldsPageIsServed(unittest.TestCase):
