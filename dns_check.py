@@ -327,3 +327,35 @@ def check_forwarding(domain: str, kind: str, target: str) -> Dict[str, object]:
                          f"been forwarded somewhere else, or the change has not "
                          f"propagated yet.")
     return result
+
+
+def lookup_records(domain: str, kind: str = FORWARD_A) -> Dict[str, object]:
+    """
+    What the domain's DNS actually says right now, for the given kind.
+
+    Separate from check_forwarding because asking "what is it now" is a
+    different question from "is it what you wanted". The operator needs the first
+    one while they are filling the form in -- to read the current nameservers off
+    the screen rather than typing them from memory, where a single wrong
+    character means the check never matches and the forwarding looks like it was
+    never done.
+    """
+    domain = (domain or "").strip().lower()
+    kind = (kind or FORWARD_A).strip().lower()
+    if kind not in FORWARD_KINDS:
+        return {"domain": domain, "kind": kind, "observed": [],
+                "message": f"Unknown kind '{kind}'. Use one of: {', '.join(FORWARD_KINDS)}."}
+    if kind == FORWARD_A:
+        observed = sorted(set(resolve_ips(domain)))
+        noun = "address"
+    else:
+        observed = resolve_ns(domain)
+        noun = "name server"
+    return {
+        "domain": domain, "kind": kind, "observed": observed,
+        "message": (f"{domain} currently resolves to {', '.join(observed)}."
+                    if observed and kind == FORWARD_A else
+                    (f"{domain} is currently delegated to {', '.join(observed)}."
+                     if observed else
+                     f"{domain} has no {noun} record yet.")),
+    }

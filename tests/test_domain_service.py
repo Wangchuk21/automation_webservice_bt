@@ -367,3 +367,96 @@ class TestTheQueueOffersTheRightActions(unittest.TestCase):
         """An address left in the box after switching to name servers would be
         compared against a delegation and quietly never match."""
         self.assertTrue("syncKind" in self.js)
+
+
+class TestTheLiveLookup(unittest.TestCase):
+    """
+    Reading the domain's real records off the screen, rather than typing them.
+
+    A mistyped nameserver fails every later check and looks exactly like the
+    forwarding was never done, so the operator needs to be able to see what is
+    actually there and copy it.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        root = Path(__file__).resolve().parent.parent
+        cls.js = (root / "static" / "js" / "app.js").read_text()
+        cls.html = (root / "templates" / "index.html").read_text()
+
+    def test_the_lookup_asks_for_the_right_question(self):
+        from dns_check import lookup_records
+        self.assertIn("dns/records?domain=", self.js)
+        got = lookup_records("bt.bt", "nameserver")
+        self.assertEqual(sorted(got["observed"]), ["ns1.druknet.bt", "ns2.druknet.bt"])
+        self.assertIn("delegated", got["message"])
+
+    def test_an_unknown_kind_is_refused_rather_than_guessed(self):
+        from dns_check import lookup_records
+        got = lookup_records("bt.bt", "carrier-pigeon")
+        self.assertEqual(got["observed"], [])
+        self.assertIn("Unknown kind", got["message"])
+
+    def test_a_domain_with_no_record_says_so_without_pretending(self):
+        from dns_check import lookup_records
+        got = lookup_records("wank.bt", "a")
+        self.assertEqual(got["observed"], [])
+        self.assertIn("no address record", got["message"])
+
+    def test_the_answer_can_be_copied_into_the_target(self):
+        self.assertTrue('id="ds-live-use"' in self.html)
+        self.assertTrue("lastLive.observed.join" in self.js)
+
+    def test_it_says_when_the_entry_disagrees_with_reality(self):
+        """The case that matters: the operator has typed the wrong nameserver and
+        would otherwise not find out until the check failed."""
+        self.assertTrue("ds-live-diff" in self.js)
+        self.assertIn("different from what you entered", self.js)
+
+    def test_switching_kind_reruns_the_lookup(self):
+        """A record for the wrong question is worse than none: an address would
+        be compared against a delegation and quietly never match."""
+        self.assertIn('kind.addEventListener("change"', self.js)
+
+    def test_the_card_does_not_duplicate_the_hosting_form(self):
+        self.assertIn("use the provisioning form above next", self.html)
+        self.assertIn("This card is for the domain itself", self.html)
+
+
+class TestTheCardSitsWhereTheOperatorIsLooking(unittest.TestCase):
+    """
+    It was stranded near the bottom of the page, past the surrender and
+    suspension sections. Registering a domain and then finding out its
+    forwarding is still pending are the same piece of work, and an operator
+    working from the provisioning form would not have seen it there.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.html = (Path(__file__).resolve().parent.parent
+                    / "templates" / "index.html").read_text()
+
+    def _order(self):
+        h = self.html
+        return {
+            name: h.index(marker)
+            for name, marker in [
+                ("provisioning", 'id="provision-form"'),
+                ("domain_service", 'id="domain-service"'),
+                ("queue", 'id="domain-service-queue"'),
+                ("dns_tool", 'id="dns-check"'),
+                ("surrender", 'id="surrender"'),
+            ]
+        }
+
+    def test_it_comes_directly_after_the_provisioning_form(self):
+        o = self._order()
+        self.assertLess(o["provisioning"], o["domain_service"])
+        self.assertLess(o["domain_service"], o["queue"])
+        self.assertLess(o["queue"], o["dns_tool"])
+
+    def test_nothing_buried_is_between_the_form_and_the_card(self):
+        """The two id="surrender" / "id="suspension-review" sections must not
+        come first, which is where this started."""
+        o = self._order()
+        self.assertLess(o["domain_service"], o["surrender"])

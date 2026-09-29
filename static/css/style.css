@@ -1517,5 +1517,28 @@ select.custom-select:focus {
   padding-left: 10px;
 }
 #ds-reg-form { margin-top: 12px; max-height: 520px; overflow-y: auto; }
-#ds-reg-form .nic-reg-grid { grid-template-columns: 1fr; }
+#ds-reg-form { max-height: 620px; }
+#ds-reg-form .nic-reg-grid { grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); }
 #ds-reg-missing { margin-top: 10px; }
+
+/* Live DNS read-out beside the forwarding target. It exists so the current
+   nameservers or address are read off the screen rather than typed from memory:
+   one wrong character fails every later check and looks like the forwarding was
+   never done. */
+.ds-live {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  font-size: 11px;
+}
+.ds-live-row { flex: 1; min-width: 0; }
+.ds-live code { font-family: var(--font-mono); color: var(--text-main); }
+.ds-live-ok { color: #6ee7b7; }
+.ds-live-diff { color: #fcd34d; }

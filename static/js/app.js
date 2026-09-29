@@ -1325,6 +1325,50 @@ function copyFullHandover() {
 // factual about the public internet.
 // ========================================================
 
+// What the domain's DNS says right now, for the selected kind.
+let lastLive = { observed: [] };
+
+async function lookupLiveRecords() {
+  const domain = document.getElementById("ds_domain").value.trim();
+  const kind = document.getElementById("ds_kind").value;
+  const box = document.getElementById("ds-live");
+  const text = document.getElementById("ds-live-text");
+  const use = document.getElementById("ds-live-use");
+  if (!box) return;
+  if (!domain || domain.indexOf(".") < 0) {
+    box.hidden = true;
+    lastLive = { observed: [] };
+    return;
+  }
+  box.hidden = false;
+  text.innerHTML = '<span class="form-hint">Looking up…</span>';
+  try {
+    const res = await fetch(
+      `/api/v1/dns/records?domain=${encodeURIComponent(domain)}&kind=${encodeURIComponent(kind)}`,
+      { headers: apiHeaders() });
+    const data = await res.json();
+    if (!res.ok) throw new Error((data && data.detail) || `HTTP ${res.status}`);
+    lastLive = data;
+    const found = data.observed || [];
+    if (!found.length) {
+      text.innerHTML = `<span class="form-hint">${esc(data.message)} `
+        + `Nothing to copy yet — this is normal before the forwarding is done.</span>`;
+      use.hidden = true;
+      return;
+    }
+    use.hidden = false;
+    const target = document.getElementById("ds_target").value.trim().toLowerCase();
+    const wanted = target.replace(/\s+/g, "").split(",").filter(Boolean).sort();
+    const agree = wanted.length > 0 && wanted.join(",") === found.slice().sort().join(",");
+    text.innerHTML = `<strong>Live:</strong> <code>${esc(found.join(", "))}</code> `
+      + (agree ? '<span class="ds-live-ok">— already what you entered</span>'
+               : '<span class="ds-live-diff">— different from what you entered</span>');
+  } catch (e) {
+    box.hidden = true;
+    lastLive = { observed: [] };
+  }
+}
+
 const DS_STATUS_LABEL = {
   registered: "registered",
   awaiting_dns: "awaiting DNS",
@@ -1348,6 +1392,19 @@ function initDomainServices() {
   const forwarding = document.getElementById("ds_forwarding");
   const service = document.getElementById("ds_service");
 
+  // Read the domain's real records rather than having them typed from memory.
+  // A single wrong character in a nameserver fails every later check and looks
+  // exactly like the forwarding was never done.
+  document.getElementById("ds-live-use").addEventListener("click", () => {
+    if (lastLive && lastLive.observed && lastLive.observed.length) {
+      target.value = lastLive.observed.join(",");
+      target.dispatchEvent(new Event("input"));
+    }
+  });
+  const runLive = () => lookupLiveRecords();
+  kind.addEventListener("change", () => { syncKind(); runLive(); });
+  document.getElementById("ds_domain").addEventListener("blur", runLive);
+
   const syncKind = () => {
     const isNameserver = kind.value === "nameserver";
     target.placeholder = isNameserver
@@ -1365,7 +1422,6 @@ function initDomainServices() {
       target.value = "";
     }
   };
-  kind.addEventListener("change", syncKind);
   syncKind();
 
   // Forwarding details only matter for forwarding.

@@ -33,7 +33,9 @@ from nic_client import (
 from bscs_client import BSCSClient, BSCSError
 import domain_service
 from domain_service import AWAITING_DNS, NOTIFIED, VERIFIED
-from dns_check import FORWARD_KINDS, FORWARDED, check_domain, check_forwarding
+from dns_check import (
+    FORWARD_KINDS, FORWARDED, check_domain, check_forwarding, lookup_records,
+)
 from suspension import (
     SKIP_ALREADY_BILLING, SKIP_NO_MATCH, SKIP_OTHER_REASON, SUSPEND, latest_report,
 )
@@ -984,6 +986,22 @@ def activate_account_now(
     return {"success": True, "already_active": bool(result.get("already_active")),
             "message": result.get("message", ""),
             "panel": panel_norm, "username": username, "domain": state.get("domain", "")}
+
+
+@app.get("/api/v1/dns/records", dependencies=[Depends(require_api_token)])
+def dns_records(domain: str, kind: str = "a"):
+    """
+    What a domain's DNS says right now, for the given kind.
+
+    Used while filling the forwarding form in, so the current nameservers or
+    address are read off the screen rather than typed from memory. A mistyped
+    nameserver would fail every later check and look exactly like the
+    forwarding never having been done.
+    """
+    domain = (domain or "").strip()
+    if not domain:
+        raise HTTPException(status_code=422, detail="A domain is required.")
+    return lookup_records(domain, kind=kind)
 
 
 @app.get("/api/v1/nic/extensions", dependencies=[Depends(require_api_token)])
