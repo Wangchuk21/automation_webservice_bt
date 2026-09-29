@@ -920,12 +920,7 @@ async def suspend_account_now(
     if not result.get("success"):
         raise HTTPException(status_code=500, detail=result.get("message", "Suspension failed."))
 
-    # DirectAdmin cannot be suspended through an API at all, so the result is a
-    # recorded instruction rather than a completed action. It is passed through
-    # rather than turned into a 500, because nothing has failed -- and the
-    # operator needs to see the steps, not an error.
-    return {"success": True, "manual": bool(result.get("manual")),
-            "message": result.get("message", ""),
+    return {"success": True, "message": result.get("message", ""),
             "panel": panel_norm, "username": username, "domain": state.get("domain", "")}
 
 
@@ -984,8 +979,7 @@ async def activate_account_now(
     if not result.get("success"):
         raise HTTPException(status_code=500, detail=result.get("message", "Activation failed."))
 
-    return {"success": True, "manual": bool(result.get("manual")),
-            "already_active": bool(result.get("already_active")),
+    return {"success": True, "already_active": bool(result.get("already_active")),
             "message": result.get("message", ""),
             "panel": panel_norm, "username": username, "domain": state.get("domain", "")}
 

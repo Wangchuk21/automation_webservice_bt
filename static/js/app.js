@@ -346,16 +346,12 @@ async function activateNow(panel, username) {
     });
     const data = await res.json();
     if (res.ok) {
-      const manual = !!data.manual;
       const already = !!data.already_active;
-      const heading = already ? "Already active"
-        : (manual ? "Recorded — action needed" : "Activated");
-      box.className = `surrender-result ${manual ? "surrender-step-warn" : "surrender-step-ok"}`;
-      box.innerHTML = `<h4>${heading}</h4><p>${esc(data.message)}</p>`;
-      showToast(manual ? "Recorded — do it in the DirectAdmin panel"
-                       : (already ? `${username} is already active`
-                                  : `${username} is back online`),
-                manual ? "error" : "success");
+      box.className = "surrender-result surrender-step-ok";
+      box.innerHTML = `<h4>${already ? "Already active" : "Activated"}</h4>`
+        + `<p>${esc(data.message)}</p>`;
+      showToast(already ? `${username} is already active`
+                        : `${username} is back online`, "success");
     } else {
       const msg = (data && (data.detail || data.message)) || `HTTP ${res.status}`;
       // 409 is a refusal, not a failure: the account is suspended for another
@@ -400,15 +396,9 @@ async function suspendNow(panel, username) {
     });
     const data = await res.json();
     if (res.ok) {
-      // DirectAdmin has no suspension API, so the result is a recorded
-      // instruction. It must not be styled as "done", because the account is
-      // still up until somebody does it in the panel.
-      const manual = !!data.manual;
-      box.className = `surrender-result ${manual ? "surrender-step-warn" : "surrender-step-ok"}`;
-      box.innerHTML = `<h4>${manual ? "Recorded — action needed" : "Suspended"}</h4>`
-        + `<p>${esc(data.message)}</p>`;
-      showToast(manual ? "Recorded — do it in the DirectAdmin panel"
-                       : `Suspended ${username}`, manual ? "error" : "success");
+      box.className = "surrender-result surrender-step-ok";
+      box.innerHTML = `<h4>Suspended</h4><p>${esc(data.message)}</p>`;
+      showToast(`Suspended ${username}`, "success");
     } else {
       const msg = (data && (data.detail || data.message)) || `HTTP ${res.status}`;
       // 409 is the expected refusal: already suspended, so nothing was changed.

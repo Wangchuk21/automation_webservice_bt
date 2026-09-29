@@ -77,14 +77,10 @@ class TestOnlyBillingSuspensionsAreLifted(unittest.TestCase):
         p = prov(CPanelProvisioner, state(True, "billing"), after=state(False, ""))
         self.assertTrue(p.activate_account("wank", confirm=True)["success"])
 
-    def test_billing_on_directadmin_is_recorded_not_claimed(self):
-        """DirectAdmin has no API for this, so the result must say the account
-        is still suspended rather than report it done."""
-        p = prov(DirectAdminProvisioner, state(True, "Billing"))
-        got = p.activate_account("wank", confirm=True)
-        self.assertTrue(got["success"])
-        self.assertTrue(got["manual"], "must be flagged as needing a manual step")
-        self.assertIn("still suspended", got["message"])
+    def test_billing_is_lifted_on_directadmin_too(self):
+        p = prov(DirectAdminProvisioner, state(True, "Billing"), after=state(False, ""))
+        with patch.object(DirectAdminProvisioner, "_select_users_action"):
+            self.assertTrue(p.activate_account("wank", confirm=True)["success"])
 
     def test_the_reason_match_ignores_case_and_padding(self):
         p = prov(CPanelProvisioner, state(True, "  BILLING "), after=state(False, ""))
@@ -138,11 +134,10 @@ class TestSuccessIsVerifiedNotAssumed(unittest.TestCase):
         self.assertFalse(got["success"])
         self.assertIn("still suspended", got["message"])
 
-    def test_directadmin_never_claims_an_account_it_cannot_reach(self):
+    def test_directadmin_does_not_claim_an_account_it_cannot_reach(self):
         p = prov(DirectAdminProvisioner, state(True, "billing"))
-        got = p.activate_account("wank", confirm=True)
-        self.assertTrue(got["manual"])
-        self.assertNotIn("back up", got["message"])
+        with patch.object(DirectAdminProvisioner, "_select_users_action"):
+            self.assertFalse(p.activate_account("wank", confirm=True)["success"])
 
     def test_the_cpanel_call_is_the_verified_one(self):
         """unsuspendacct, read from Accounts.pm on the server. cPanel has no
@@ -155,21 +150,58 @@ class TestSuccessIsVerifiedNotAssumed(unittest.TestCase):
         self.assertNotIn("suspendacct user", command.replace("unsuspendacct user", ""))
         self.assertNotIn("reason=", command)
 
-    def test_directadmin_makes_no_api_call_at_all(self):
-        """The old CMD_API_MODIFY_USER call was inferred from the binary and
-        never worked. Its own swagger spec has no suspend endpoint."""
-        p = prov(DirectAdminProvisioner, state(True, "billing"))
-        with patch("provisioners.directadmin.requests.get") as get:
-            p.activate_account("wank", confirm=True)
-        get.assert_not_called()
+    def test_directadmin_uses_the_skins_own_endpoint(self):
+        """POST /CMD_SELECT_USERS, which is what the Evolution skin's Suspend
+        button calls. Its documented API has no such function."""
+        p = prov(DirectAdminProvisioner, state(False), after=state(True, "billing"))
+        with patch("provisioners.directadmin.requests.post",
+                   return_value=MagicMock(text="")) as post:
+            p.suspend_account("wank", reason="billing", confirm=True)
+        self.assertIn("CMD_SELECT_USERS", post.call_args[0][0])
+        params = post.call_args.kwargs["params"]
+        self.assertEqual(params["dosuspend"], "1")
+        self.assertEqual(params["reason"], "billing")
+        self.assertEqual(params["location"], "CMD_USER_SHOW")
 
-    def test_the_suspension_path_also_makes_no_api_call(self):
-        p = prov(DirectAdminProvisioner, state(False))
-        with patch("provisioners.directadmin.requests.get") as get:
+    def test_the_selection_must_be_sent_as_an_array(self):
+        """Sent as a plain scalar, DirectAdmin iterates an empty selection,
+        answers 'All selected Users have been suspended' and changes nothing.
+        It looks exactly like success."""
+        p = prov(DirectAdminProvisioner, state(False), after=state(True, "billing"))
+        with patch("provisioners.directadmin.requests.post",
+                   return_value=MagicMock(text="")) as post:
+            p.suspend_account("wank", reason="billing", confirm=True)
+        params = post.call_args.kwargs["params"]
+        self.assertIn("select[]", params)
+        self.assertEqual(params["select[]"], "wank")
+        self.assertNotIn("select", params)
+
+    def test_activation_sends_the_mirror_flag(self):
+        p = prov(DirectAdminProvisioner, state(True, "billing"), after=state(False, ""))
+        with patch("provisioners.directadmin.requests.post",
+                   return_value=MagicMock(text="")) as post:
+            p.activate_account("wank", confirm=True)
+        params = post.call_args.kwargs["params"]
+        self.assertEqual(params["dounsuspend"], "1")
+        self.assertNotIn("dosuspend", params)
+
+    def test_the_response_body_is_never_the_success_signal(self):
+        """DirectAdmin reports an error from a later skin step -- a .php
+        directory it cannot create for a jailed user -- even when the
+        suspension worked. Only the re-read account counts."""
+        noisy = MagicMock(text='{"error": "An error has occurred", "result": "mkdir(/home/...): No such file"}')
+        p = prov(DirectAdminProvisioner, state(False), after=state(True, "billing"),
+                 exec_result=noisy)
+        with patch("provisioners.directadmin.requests.post", return_value=noisy):
+            self.assertTrue(p.suspend_account("wank", reason="billing", confirm=True)["success"])
+
+    def test_a_request_that_changed_nothing_is_reported_as_failure(self):
+        p = prov(DirectAdminProvisioner, state(False), after=state(False, ""))
+        with patch("provisioners.directadmin.requests.post",
+                   return_value=MagicMock(text="")):
             got = p.suspend_account("wank", reason="billing", confirm=True)
-        get.assert_not_called()
-        self.assertTrue(got["manual"])
-        self.assertIn("NOT suspended", got["message"])
+        self.assertFalse(got["success"])
+        self.assertIn("Nothing was changed", got["message"])
 
 
 class TestActivateEndpoint(unittest.TestCase):

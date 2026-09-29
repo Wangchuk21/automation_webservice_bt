@@ -319,6 +319,35 @@ class DirectAdminProvisioner(BaseProvisioner):
             "suspend_time": (data.get("suspend_date", [""])[0] or "").strip(),
         }
 
+    def _select_users_action(self, username: str, **params) -> str:
+        """
+        Run a bulk action against one user, the way the Evolution skin does.
+
+        DirectAdmin's documented API has no suspension function -- its own
+        /static/swagger.json lists 272 endpoints and none of them suspend,
+        unsuspend or lock a user, and CMD_API_MODIFY_USER rejects a "suspended"
+        parameter. But the skin's Suspend button is not using that API: it posts
+        to the legacy CMD_SELECT_USERS with location=CMD_USER_SHOW and a
+        dosuspend flag, reading the parameters out of the skin's own JavaScript.
+
+        The selection must be sent as an array ("select[]"). Sent as a plain
+        scalar, DirectAdmin iterates an empty selection, answers "All selected
+        Users have been suspended" and changes nothing at all -- which looks
+        exactly like success.
+
+        Returns the raw response, which callers must NOT treat as the result:
+        the response carries an error from a later skin step (a .php directory it
+        cannot create for a jailed user), even when the suspension itself
+        succeeded. Callers verify by re-reading the account.
+        """
+        base = api_base_url(self.host, self.tls_hostname, 2222)
+        payload = {"json": "yes", "location": "CMD_USER_SHOW", "select[]": username}
+        payload.update(params)
+        resp = requests.post(f"{base}/CMD_SELECT_USERS",
+                             auth=(self.api_user, self.api_password),
+                             params=payload, verify=resolve_verify(), timeout=60)
+        return resp.text or ""
+
     def suspend_account(
         self,
         username: str,
@@ -326,24 +355,16 @@ class DirectAdminProvisioner(BaseProvisioner):
         confirm: bool = False
     ) -> Dict[str, Any]:
         """
-        Record a DirectAdmin suspension. The suspension itself is manual.
+        Suspend a DirectAdmin account, through the same mechanism as the GUI.
 
-        DirectAdmin has no API for this. Its own published specification, served
-        by the panel at /static/swagger.json, lists 272 endpoints and not one of
-        them suspends, unsuspends or unlocks a user. An earlier version of this
-        method called CMD_API_MODIFY_USER with suspended=yes, which was inferred
-        from the binary rather than from anything that worked: the API rejects
-        the parameter and answers "If you are trying to view the user settings,
-        use: API_SHOW_USER_CONFIG", because it is being read as a read-only call.
+        Refuses without confirm=True, and refuses when the account is already
+        suspended so an existing reason -- abuse, spam, user_bandwidth -- is
+        never overwritten with "billing". Overwriting would destroy the only
+        record of why a customer was shut off.
 
-        So this records the intent and tells the operator what to do in the
-        panel, the same shape as a DirectAdmin surrender. It is not a silent
-        no-op: the state is still read, and an account already suspended keeps
-        its reason and is never relabelled.
-
-        Re-clicking after doing it in the GUI reports "already suspended", so
-        the record is self-correcting rather than needing to be marked done by
-        hand.
+        Returns success=False with already_suspended=True when the account was
+        left alone for that reason, so callers can distinguish "did nothing on
+        purpose" from "failed".
         """
         if not confirm:
             return {"success": False, "message": "Refusing to suspend without confirm=True."}
@@ -359,15 +380,20 @@ class DirectAdminProvisioner(BaseProvisioner):
                     "message": f"'{username}' is already suspended "
                                f"(reason: {state['reason'] or 'not recorded'}). Left untouched."}
 
-        return {
-            "success": True,
-            "manual": True,
-            "message": (f"'{username}' is NOT suspended yet. DirectAdmin has no API "
-                        f"for this, so it must be done in the panel: DirectAdmin "
-                        f"admin panel -> User Manager -> {username} -> Suspend, "
-                        f"with the reason '{reason}'. This action is recorded in "
-                        f"the audit log."),
-        }
+        try:
+            self._select_users_action(username, dosuspend="1", reason=reason)
+        except Exception as e:
+            return {"success": False, "message": f"Request failed: {e}"}
+
+        # The response is not the result: DirectAdmin reports an error from a
+        # later skin step even on success. The account itself is the proof.
+        after = self.account_state(username)
+        if after is None or not after["suspended"]:
+            return {"success": False,
+                    "message": f"DirectAdmin accepted the request but '{username}' "
+                               f"is not suspended. Nothing was changed."}
+        return {"success": True,
+                "message": f"Suspended '{username}' on {self.host}. Reason: {reason}"}
 
     def allow_sftp_user(self, username: str) -> Dict[str, Any]:
         """
@@ -512,13 +538,15 @@ rm -f "$bak"
 
     def activate_account(self, username: str, confirm: bool = False) -> Dict[str, Any]:
         """
-        Record a DirectAdmin activation. The activation itself is manual.
+        Lift a billing suspension, putting the customer's website back up.
 
-        DirectAdmin has no API for this -- its own /static/swagger.json lists 272
-        endpoints and none suspend, unsuspend or unlock a user -- so the same
-        applies here as to suspension. The billing-only safety rule is still
-        enforced, because that is the part worth keeping: an account suspended
-        for abuse is refused before it can be recorded for reactivation.
+        The mirror image of suspend_account, carrying the mirror-image safety
+        rule: only an account suspended for *billing* may be activated. One
+        suspended for abuse, spam or compromise is refused, because a payment
+        does not undo any of those.
+
+        Same CMD_SELECT_USERS mechanism with the dounsuspend flag, and the same
+        rule that the response is not the result -- the account is re-read.
         """
         if not confirm:
             return {"success": False, "message": "Refusing to activate without confirm=True."}
@@ -540,14 +568,18 @@ rm -f "$bak"
                                f"A payment does not clear that. Clear it on the panel first "
                                f"if it should be reactivated."}
 
-        return {
-            "success": True,
-            "manual": True,
-            "message": (f"'{username}' is still suspended. DirectAdmin has no API for "
-                        f"this, so it must be done in the panel: DirectAdmin admin "
-                        f"panel -> User Manager -> {username} -> UnSuspend. This action "
-                        f"is recorded in the audit log."),
-        }
+        try:
+            self._select_users_action(username, dounsuspend="1")
+        except Exception as e:
+            return {"success": False, "message": f"Request failed: {e}"}
+
+        after = self.account_state(username)
+        if after is None or after["suspended"]:
+            return {"success": False,
+                    "message": f"DirectAdmin accepted the request but '{username}' "
+                               f"is still suspended. Nothing was changed."}
+        return {"success": True,
+                "message": f"Activated '{username}' on {self.host}. Its website is back up."}
 
     def delete_account(
         self,
