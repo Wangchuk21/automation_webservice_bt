@@ -25,13 +25,15 @@ from provisioners.base import (
     validate_renewal_date,
     ValidationError,
 )
-from notifier import send_customer_welcome_email, test_smtp_connection
+from notifier import send_customer_welcome_email, test_smtp_connection, send_forwarding_confirmation
 from nic_client import (
     NICClient, REGISTRY_FIELDS, build_registry_payload, missing_registry_fields,
     registry_field_spec, split_domain_ext,
 )
 from bscs_client import BSCSClient, BSCSError
-from dns_check import check_domain
+import domain_service
+from domain_service import AWAITING_DNS, NOTIFIED, VERIFIED
+from dns_check import FORWARD_KINDS, FORWARDED, check_domain, check_forwarding
 from suspension import (
     SKIP_ALREADY_BILLING, SKIP_NO_MATCH, SKIP_OTHER_REASON, SUSPEND, latest_report,
 )
@@ -1141,3 +1143,184 @@ def register_nic_domain(payload: DomainRegisterRequest):
         fields=payload.nic_fields,
     )
     return res
+
+# ---------------------------------------------------------------------------
+# Domain services
+#
+# A domain is registered on nic.bt.bt first, and the customer then chooses
+# hosting or forwarding. Forwarding is done by BT staff by hand, in systems this
+# service does not touch: nic.bt.bt holds no DNS or nameserver records, and .bt
+# delegation belongs to ns1/ns2.druknet.bt. So the service's part is to record
+# what was asked for, verify it against real DNS, and only then let an operator
+# tell the customer.
+# ---------------------------------------------------------------------------
+
+class DomainOnlyRequest(BaseModel):
+    """Just a domain. Verify and notify read everything else from the record."""
+    domain: str
+
+
+class DomainServiceRequest(BaseModel):
+    domain: str
+    customer_name: str
+    email: str
+    # The full nic.bt.bt field set, keyed by the registry's own field names.
+    nic_fields: Dict[str, str] = Field(default_factory=dict)
+    service: str = Field("forwarding", description="hosting or forwarding")
+    forwarding_kind: Optional[str] = Field(None, description="a or nameserver")
+    forwarding_target: Optional[str] = Field(None, description="The address, or the comma-separated nameservers, it was pointed at.")
+
+
+@app.get("/api/v1/domain-services", dependencies=[Depends(require_api_token)])
+def list_domain_services(status: Optional[str] = None):
+    """Every domain service, newest change first, optionally filtered by status."""
+    entries = (domain_service.list_by_status(status) if status
+               else domain_service.current_states())
+    return {"services": entries, "count": len(entries)}
+
+
+@app.post("/api/v1/domain-services/register", dependencies=[Depends(require_api_token)])
+def register_domain_service(payload: DomainServiceRequest):
+    """
+    Register a domain on nic.bt.bt and record what the customer asked for.
+
+    The registry write happens first. The record is written after it succeeds,
+    so the log never claims a registration that did not happen, and a failure
+    here is reported as a registry failure rather than a bookkeeping one.
+    """
+    try:
+        domain = domain_service.normalise_domain(payload.domain)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+    service = (payload.service or "").strip().lower()
+    if service not in domain_service.VALID_SERVICE:
+        raise HTTPException(status_code=422,
+                            detail=f"service must be one of: "
+                                   f"{', '.join(domain_service.VALID_SERVICE)}")
+
+    kind = (payload.forwarding_kind or "").strip().lower()
+    target = (payload.forwarding_target or "").strip()
+    if service == "forwarding":
+        if kind not in FORWARD_KINDS:
+            raise HTTPException(status_code=422,
+                                detail=f"forwarding_kind must be one of: "
+                                       f"{', '.join(FORWARD_KINDS)}")
+        if not target:
+            raise HTTPException(
+                status_code=422,
+                detail="forwarding_target is required: the address, or the "
+                       "nameservers, the domain was pointed at. Without it the "
+                       "forwarding cannot be verified later.")
+
+    nic = NICClient()
+    result = nic.register_or_update_domain(
+        domain=domain,
+        customer_name=payload.customer_name,
+        email=payload.email,
+        ext=(payload.nic_fields or {}).get("ext"),
+        fields=payload.nic_fields or {},
+    )
+    if not result.get("success"):
+        raise HTTPException(status_code=502,
+                            detail=result.get("message", "nic.bt.bt rejected the registration."))
+
+    entry = domain_service.record_registration(
+        domain=domain,
+        customer_name=payload.customer_name,
+        email=payload.email,
+        service=service,
+        forwarding_kind=kind,
+        forwarding_target=target,
+        registry_action=result.get("action", ""),
+        registry_message=result.get("message", ""),
+    )
+    return {"success": True, "service": entry, "nic": result}
+
+
+@app.post("/api/v1/domain-services/verify", dependencies=[Depends(require_api_token)])
+def verify_domain_service(payload: DomainOnlyRequest):
+    """
+    Check whether a forwarding has actually been done, and record the answer.
+
+    Separate from registering so it can be re-run as often as the operator
+    likes: forwarding is done by hand and takes however long it takes.
+    """
+    try:
+        domain = domain_service.normalise_domain(payload.domain)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+    state = domain_service.get_state(domain)
+    if state is None:
+        raise HTTPException(status_code=404,
+                            detail=f"No domain service is recorded for '{domain}'.")
+    if state.get("service") != "forwarding":
+        raise HTTPException(status_code=400,
+                            detail=f"'{domain}' is recorded as {state.get('service')}, "
+                                   f"which has no forwarding to verify.")
+    if state.get("status") == NOTIFIED:
+        # Still allow the check, but say clearly that the customer has been told
+        # and a later mismatch is worth acting on.
+        pass
+
+    result = check_forwarding(domain, state.get("forwarding_kind", ""),
+                              state.get("forwarding_target", ""))
+    entry = domain_service.record_verification(domain, result)
+    return {"success": True, "check": result, "service": entry}
+
+
+@app.post("/api/v1/domain-services/notify", dependencies=[Depends(require_token_for_destructive)])
+def notify_domain_service(payload: DomainOnlyRequest):
+    """
+    Email the customer that their domain has been forwarded.
+
+    Refused unless a DNS check has already confirmed the forwarding. This is the
+    only outward-facing step in the flow, and the email asserts something
+    factual about the public internet -- so the check is a precondition, not a
+    suggestion. Otherwise a customer is told their domain is live while it still
+    points nowhere.
+    """
+    try:
+        domain = domain_service.normalise_domain(payload.domain)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+    state = domain_service.get_state(domain)
+    if state is None:
+        raise HTTPException(status_code=404,
+                            detail=f"No domain service is recorded for '{domain}'.")
+    if state.get("service") != "forwarding":
+        raise HTTPException(status_code=400,
+                            detail=f"'{domain}' is recorded as {state.get('service')}. "
+                                   f"There is no forwarding to notify about.")
+    if not state.get("email"):
+        raise HTTPException(status_code=422,
+                            detail=f"No customer email is recorded for '{domain}', "
+                                   f"so there is nobody to notify.")
+    if state.get("status") == NOTIFIED:
+        raise HTTPException(status_code=409,
+                            detail=f"'{domain}' was already notified on "
+                                   f"{state.get('notified_at')}. It has not been emailed again.")
+
+    # The gate. A status of verified only ever comes from a successful check.
+    if state.get("status") != VERIFIED:
+        last = state.get("last_check_message") or "it has not been checked yet"
+        raise HTTPException(
+            status_code=409,
+            detail=(f"Refusing to notify: the forwarding for '{domain}' is not "
+                    f"verified ({last}). Run the DNS check first. Emailing a "
+                    f"customer that their domain is live, when it is not, is "
+                    f"worse than not emailing them at all."))
+
+    sent, message = send_forwarding_confirmation(
+        domain=domain,
+        email=state.get("email", ""),
+        kind=state.get("forwarding_kind", ""),
+        target=state.get("forwarding_target", ""),
+        observed=state.get("observed", []),
+    )
+    entry = domain_service.record_notification(domain, sent, message)
+    if not sent:
+        raise HTTPException(status_code=502, detail=message)
+    return {"success": True, "message": message, "service": entry}

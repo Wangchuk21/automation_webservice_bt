@@ -200,3 +200,130 @@ def check_domain(domain: str, panel: str = "cpanel",
         "web_answers": web_answers,
         "message": message,
     }
+
+# ---------------------------------------------------------------------------
+# Forwarding verification
+#
+# Forwarding is done by BT staff, by hand, in systems this service does not
+# touch: nic.bt.bt holds no DNS or nameserver records (its domain form is the
+# 23 required fields plus notes, and the portal has no such page), and .bt
+# delegation belongs to ns1/ns2.druknet.bt. So the system's part is to verify,
+# and the verification differs by kind:
+#
+#   a           the domain should resolve to the target address
+#   nameserver  the domain should be delegated to the target nameservers
+#
+# Asking the wrong question is the risk here. For a nameserver delegation the
+# A record is still whatever it always was, so an address check would pass for
+# a domain that was never forwarded. Hence the kind decides the question.
+# ---------------------------------------------------------------------------
+
+FORWARD_A = "a"
+FORWARD_NAMESERVER = "nameserver"
+FORWARD_KINDS = (FORWARD_A, FORWARD_NAMESERVER)
+
+# "not yet" covers the three ways a delegation can be incomplete or absent, all
+# of which mean the same thing to an operator: nobody has finished the job.
+# Distinct from an error, which is handled separately.
+NOT_FORWARDED = "not_forwarded"
+FORWARDED = "forwarded"
+MISMATCH = "mismatch"
+
+
+def resolve_ns(domain: str, lifetime: float = RESOLVE_TIMEOUT) -> List[str]:
+    """
+    The nameservers a domain is delegated to.
+
+    Needs a real DNS query: socket.getaddrinfo answers addresses and nothing
+    else, so the delegation is invisible to it.
+
+    Returns an empty list when there is no delegation record -- which includes
+    the name not existing at all, and the nameserver not answering. For an
+    operator those are the same situation, and neither is worth a stack trace.
+    """
+    domain = (domain or "").strip().rstrip(".").lower()
+    if not domain:
+        return []
+    try:
+        import dns.resolver
+    except ImportError:  # pragma: no cover - dependency is in requirements
+        logger.warning("dnspython is not installed, so nameserver delegation "
+                       "cannot be verified")
+        return []
+    try:
+        answers = dns.resolver.resolve(domain, "NS", lifetime=lifetime)
+        names = sorted({str(r).rstrip(".").lower() for r in answers})
+        return names
+    except Exception as e:
+        # NoAnswer, NXDOMAIN, LifetimeTimeout and NoNameservers all mean the
+        # same thing here: there is no delegation to check against.
+        logger.info("No NS record for %s: %s", domain, type(e).__name__)
+        return []
+
+
+def _normalise_target(kind: str, target: str) -> List[str]:
+    """Comparable forms of what the operator said they pointed the domain at."""
+    values = [v.strip().lower().rstrip(".") for v in (target or "").replace(";", ",").split(",")]
+    values = [v for v in values if v]
+    if kind == FORWARD_A:
+        return sorted({v for v in values if _is_ip(v)})
+    return sorted({v for v in values})
+
+
+def check_forwarding(domain: str, kind: str, target: str) -> Dict[str, object]:
+    """
+    Whether a domain has actually been forwarded as requested.
+
+    `kind` is "a" or "nameserver"; `target` is the address or the nameserver
+    list BT said they set it to. Returns one of forwarded, not_forwarded or
+    mismatch, with the observed values so an operator can see what is actually
+    there rather than being told only yes or no.
+    """
+    domain = (domain or "").strip().lower()
+    kind = (kind or "").strip().lower()
+    result: Dict[str, object] = {
+        "domain": domain, "kind": kind, "target": target,
+        "observed": [], "expected": _normalise_target(kind, target),
+    }
+
+    if kind not in FORWARD_KINDS:
+        result["status"] = MISMATCH
+        result["message"] = (f"Unknown forwarding kind '{kind}'. "
+                             f"Use one of: {', '.join(FORWARD_KINDS)}.")
+        return result
+    if not result["expected"]:
+        result["status"] = MISMATCH
+        result["message"] = (f"No usable target was given for this {kind} "
+                             f"forwarding, so it cannot be verified.")
+        return result
+    if not domain:
+        result["status"] = MISMATCH
+        result["message"] = "No domain given."
+        return result
+
+    if kind == FORWARD_A:
+        observed = sorted(set(resolve_ips(domain)))
+        noun = "address"
+    else:
+        observed = resolve_ns(domain)
+        noun = "nameserver"
+    result["observed"] = observed
+
+    if not observed:
+        result["status"] = NOT_FORWARDED
+        result["message"] = (f"{domain} has no {noun} record yet, so the "
+                             f"forwarding has not been done.")
+        return result
+
+    if sorted(observed) == result["expected"] or set(observed) & set(result["expected"]):
+        result["status"] = FORWARDED
+        result["message"] = (f"{domain} is delegated to {', '.join(observed)}, "
+                             f"as requested.")
+        return result
+
+    result["status"] = MISMATCH
+    result["message"] = (f"{domain} points to {', '.join(observed)}, not the "
+                         f"expected {', '.join(result['expected'])}. It may have "
+                         f"been forwarded somewhere else, or the change has not "
+                         f"propagated yet.")
+    return result

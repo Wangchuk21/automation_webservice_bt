@@ -3,7 +3,7 @@ import ssl
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 import logging
-from typing import Tuple, Optional
+from typing import Tuple, Optional, List
 from config import settings
 from provisioners.base import ProvisionerResult
 
@@ -57,6 +57,40 @@ def test_smtp_connection(recipient: Optional[str] = None) -> Tuple[bool, str]:
         return False, f"SMTP test failed: {str(e)}"
 
 
+def _deliver(msg, recipients: List[str]) -> None:
+    """
+    Hand a prepared message to the configured SMTP server.
+
+    Extracted rather than inlined because a third kind of message was needed and
+    copying the SSL/TLS/authentication dance again would have given three places
+    to fix the same problem, one of which nobody would remember.
+    """
+    use_ssl = settings.SMTP_SSL or settings.SMTP_PORT == 465
+    if use_ssl:
+        try:
+            ctx = ssl.create_default_context()
+            server = smtplib.SMTP_SSL(settings.SMTP_HOST, settings.SMTP_PORT, context=ctx, timeout=15)
+        except Exception:
+            ctx = ssl._create_unverified_context()
+            server = smtplib.SMTP_SSL(settings.SMTP_HOST, settings.SMTP_PORT, context=ctx, timeout=15)
+        with server:
+            server.ehlo()
+            if settings.SMTP_USER and settings.SMTP_PASSWORD:
+                server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
+            server.sendmail(settings.SMTP_FROM_EMAIL, recipients, msg.as_string())
+    else:
+        with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=15) as server:
+            server.ehlo()
+            try:
+                server.starttls()
+                server.ehlo()
+            except Exception:
+                pass
+            if settings.SMTP_USER and settings.SMTP_PASSWORD:
+                server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
+            server.sendmail(settings.SMTP_FROM_EMAIL, recipients, msg.as_string())
+
+
 def send_customer_welcome_email(result: ProvisionerResult) -> Tuple[bool, str]:
     """
     Sends customer onboarding email containing Web UI & SFTP credentials.
@@ -103,33 +137,95 @@ def send_customer_welcome_email(result: ProvisionerResult) -> Tuple[bool, str]:
         msg.attach(html_part)
 
         # Send via SMTP
-        use_ssl = settings.SMTP_SSL or settings.SMTP_PORT == 465
-        if use_ssl:
-            try:
-                ctx = ssl.create_default_context()
-                server = smtplib.SMTP_SSL(settings.SMTP_HOST, settings.SMTP_PORT, context=ctx, timeout=15)
-            except Exception:
-                ctx = ssl._create_unverified_context()
-                server = smtplib.SMTP_SSL(settings.SMTP_HOST, settings.SMTP_PORT, context=ctx, timeout=15)
-            with server:
-                server.ehlo()
-                if settings.SMTP_USER and settings.SMTP_PASSWORD:
-                    server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
-                server.sendmail(settings.SMTP_FROM_EMAIL, recipients, msg.as_string())
-        else:
-            with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=15) as server:
-                server.ehlo()
-                try:
-                    server.starttls()
-                    server.ehlo()
-                except Exception:
-                    pass
-                if settings.SMTP_USER and settings.SMTP_PASSWORD:
-                    server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
-                server.sendmail(settings.SMTP_FROM_EMAIL, recipients, msg.as_string())
+        _deliver(msg, recipients)
 
         cc_info = f" (CC: {settings.SMTP_CC_EMAIL})" if settings.SMTP_CC_EMAIL else ""
         return True, f"Welcome email successfully sent to {result.email}{cc_info}."
     except Exception as e:
         logger.error(f"Failed to send email to {result.email}: {e}")
         return False, f"Failed to send email: {str(e)}"
+
+
+def _forwarding_text(domain: str, kind: str, target: str, observed) -> str:
+    where = ", ".join(str(o) for o in (observed or [])) or "the address it resolves to"
+    if kind == "nameserver":
+        how = (f"{domain} has been delegated to {where}. Any changes you make at "
+               f"{target} will now apply to this domain.")
+    else:
+        how = (f"{domain} is now live and resolves to {where}. Visitors who type "
+               f"your domain will reach the site at that address.")
+    return f"""Dear Customer,
+
+Your domain {domain} has been registered with Bhutan Telecom and the
+forwarding you requested is now complete.
+
+{how}
+
+If you have any questions, please reply to this email or contact
+{settings.SMTP_FROM_NAME} at {settings.SMTP_FROM_EMAIL}.
+
+Kind regards,
+{settings.SMTP_FROM_NAME}
+Bhutan Telecom
+"""
+
+
+def send_forwarding_confirmation(
+    domain: str,
+    email: str,
+    kind: str,
+    target: str,
+    observed=None,
+) -> Tuple[bool, str]:
+    """
+    Tell a customer their domain has been forwarded.
+
+    Only ever call this once the DNS check has confirmed it, because the email
+    asserts something factual about the public internet. Sending it early tells a
+    customer their domain is live when it is not, which is worse than telling
+    them nothing. The caller is responsible for the gate; the wording here only
+    states what has been verified.
+    """
+    if not settings.SMTP_ENABLED or not settings.SMTP_HOST:
+        return False, "SMTP is not enabled in settings, so the customer was not notified."
+    if not email or "@" not in email:
+        return False, f"Invalid customer email address: '{email}'."
+    if not domain:
+        return False, "No domain given."
+
+    try:
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = f"Your domain {domain} is now live - {settings.SMTP_FROM_NAME}"
+        msg["From"] = f"{settings.SMTP_FROM_NAME} <{settings.SMTP_FROM_EMAIL}>"
+        msg["To"] = email
+        recipients = [email]
+        if settings.SMTP_CC_EMAIL:
+            msg["Cc"] = settings.SMTP_CC_EMAIL
+            for cc_addr in [x.strip() for x in settings.SMTP_CC_EMAIL.split(",") if x.strip()]:
+                if cc_addr not in recipients:
+                    recipients.append(cc_addr)
+
+        msg.attach(MIMEText(_forwarding_text(domain, kind, target, observed), "plain", "utf-8"))
+        html = (
+            f"<p>Dear Customer,</p>"
+            f"<p>Your domain <strong>{domain}</strong> has been registered with Bhutan "
+            f"Telecom and the forwarding you requested is now complete.</p>"
+            f"<p>"
+            + (f"It is now delegated to <code>{', '.join(str(o) for o in (observed or []))}</code>. "
+               f"Changes you make at <code>{target}</code> will now apply to this domain."
+               if kind == "nameserver" else
+               f"It is now live and resolves to "
+               f"<code>{', '.join(str(o) for o in (observed or []))}</code>. Visitors who type "
+               f"your domain will reach the site at that address.")
+            + "</p>"
+            f"<p>If you have any questions, please reply to this email.</p>"
+            f"<p>Kind regards,<br>{settings.SMTP_FROM_NAME}<br>Bhutan Telecom</p>"
+        )
+        msg.attach(MIMEText(html, "html", "utf-8"))
+
+        _deliver(msg, recipients)
+        cc_info = f" (CC: {settings.SMTP_CC_EMAIL})" if settings.SMTP_CC_EMAIL else ""
+        return True, f"Forwarding confirmation sent to {email}{cc_info}."
+    except Exception as e:
+        logger.error("Failed to send the forwarding confirmation for %s: %s", domain, e)
+        return False, f"Failed to send email: {e}"

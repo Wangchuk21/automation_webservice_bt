@@ -24,6 +24,7 @@ python-dotenv==1.2.3
 # --- Hosting server automation ---
 paramiko==5.0.0
 requests==2.34.2
+dnspython==2.8.0  # real NS/A queries; socket cannot see delegation
 
 # --- CLI output ---
 rich==15.0.0

@@ -155,6 +155,12 @@ class Config:
     # field of one of its entries, not the CIDR.
     CPANEL_IPV6_RANGE: str = os.getenv("CPANEL_IPV6_RANGE", "SHARED")
 
+    # Where domain services are recorded: a domain registered on nic.bt.bt and
+    # what was then asked of it. Under /app/data so it shares the volume that is
+    # already backed up with the surrender audit trail.
+    DOMAIN_SERVICE_LOG: str = os.getenv("DOMAIN_SERVICE_LOG",
+                                        "./data/domains/services.jsonl")
+
     NIC_REGISTRAR: str = os.getenv("NIC_REGISTRAR", "DrukNet")
     # Placeholder used where the registry marks a field required but there is
     # genuinely no value. Real records on the registry use "-" for these.
