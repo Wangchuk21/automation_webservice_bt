@@ -312,3 +312,93 @@ class TestItCannotBlockOrFailProvisioning(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+def js_function(source: str, name: str) -> str:
+    """The body of one JS function, by brace matching.
+
+    Reading a fixed line range out of a script breaks the moment a line is added
+    above, and then asserts against the wrong lines while still passing.
+    """
+    start = source.index(f"function {name}(")
+    start = source.index("{", source.index(")", start))
+    depth, i = 0, start
+    while i < len(source):
+        if source[i] == "{":
+            depth += 1
+        elif source[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return source[start:i + 1]
+        i += 1
+    raise AssertionError(f"{name} has no closing brace")
+
+
+class TestThePrecheckRendersSomewhereVisible(unittest.TestCase):
+    """
+    The operator typed a domain and the panel said "Checking DNS..." for good,
+    with no result ever appearing.
+
+    renderDns was handed the domain text input instead of the precheck box. The
+    record went into an <input>, where innerHTML is not rendered, so it was
+    visible nowhere; and because the input's className was overwritten on the way,
+    the field itself picked up the green result styling. The box was never
+    touched, so it kept the placeholder written before the request went out.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        root = Path(__file__).resolve().parent.parent
+        cls.js = (root / "static" / "js" / "app.js").read_text()
+        cls.html = (root / "templates" / "index.html").read_text()
+
+    def test_the_result_goes_into_the_box_it_was_given(self):
+        body = js_function(self.js, "runDnsPrecheck")
+        self.assertIn("renderDns(out,", body,
+                      "the precheck must render into the box passed to it")
+        self.assertNotIn("renderDns(box,", body)
+
+    def test_the_field_is_only_read_for_the_staleness_check(self):
+        """It is legitimate to read the input back, to drop a result the operator
+        has already typed past. It is not legitimate to write to it."""
+        body = js_function(self.js, "runDnsPrecheck")
+        for line in body.splitlines():
+            stripped = line.strip()
+            if "getElementById(\"domain\")" in stripped:
+                self.assertNotIn("renderDns", stripped)
+                self.assertIn("const field =", stripped,
+                              "the field must be a distinct name from the box")
+        self.assertIn("field.value", body,
+                      "the staleness guard must still compare against the field")
+
+    def test_no_shadowing_declaration_inside_the_function(self):
+        """`const box` inside a function whose parameter is `box` silently
+        reassigns the target. This is the bug itself."""
+        body = js_function(self.js, "runDnsPrecheck")
+        for decl in ("const box =", "let box ="):
+            self.assertNotIn(decl, body,
+                             f"`{decl}` shadows the box parameter and is the bug")
+
+    def test_the_error_path_uses_the_box_too(self):
+        """It already did, which is why the placeholder was the only thing that
+        ever changed -- the two branches disagreed about what they were writing."""
+        body = js_function(self.js, "runDnsPrecheck")
+        self.assertIn("out.className =", body)
+        self.assertIn("out.innerHTML =", body)
+
+    def test_the_box_the_precheck_writes_to_exists(self):
+        self.assertIn('id="dns-precheck"', self.html)
+
+    def test_every_box_renderdns_touches_keeps_its_own_styling(self):
+        """
+        Three boxes share the renderer. Keying the base class off one exact id
+        meant the other two were restyled as a toolbar result, losing the
+        border and padding that makes them read as part of the form.
+        """
+        body = js_function(self.js, "renderDns")
+        self.assertIn("classList.contains(\"res-dns-status\")", body,
+                      "the base class must be matched by class, not by one id")
+        self.assertNotIn('box.id === "res-dns-status"', body)
+        boxes = [ln for ln in self.html.splitlines() if 'class="res-dns-status' in ln]
+        self.assertGreaterEqual(len(boxes), 2,
+                                "expected several boxes to share the renderer")

@@ -888,7 +888,11 @@ function renderDns(box, d, compact) {
   if (!d) { box.classList.add("hidden"); box.innerHTML = ""; return; }
   const cls = d.status === "mapped" ? "dns-ok"
     : (d.status === "unresolved" ? "dns-warn" : "dns-fail");
-  box.className = `${box.id === "res-dns-status" ? "res-dns-status" : "dns-result"} ${cls}`;
+  // Keyed off the class rather than one id: #dns-precheck, #res-dns-status and
+  // #res-post-create all share this renderer, and only the first two were
+  // recognised, so the third was restyled as a toolbar result.
+  const base = box.classList.contains("res-dns-status") ? "res-dns-status" : "dns-result";
+  box.className = `${base} ${cls}`;
   box.classList.remove("hidden");
   box.innerHTML = `<div class="dns-head">
       <span class="dns-badge">${esc(dnsBadge(d))}</span>
@@ -964,21 +968,24 @@ function scheduleDnsPrecheck() {
   dnsPrecheckTimer = setTimeout(() => runDnsPrecheck(domain, out), 700);
 }
 
-async function runDnsPrecheck(domain, box) {
+async function runDnsPrecheck(domain, out) {
   const panelEl = document.querySelector('input[name="panel"]:checked');
   const panel = panelEl ? panelEl.value : "cpanel";
   const seq = ++dnsPrecheckSeq;
   try {
     const result = await runDnsCheck(domain, panel);
-    // A newer keystroke may have moved on while this was in flight.
-    const box = document.getElementById("domain");
-    if (seq !== dnsPrecheckSeq || ((box && box.value) || "").trim() !== domain) return;
-    renderDns(box, result, true);
+    // A newer keystroke may have moved on while this was in flight, so read the
+    // field back to check the result is still about what is typed. The field and
+    // the box are two different elements: the result goes in the box, or it goes
+    // nowhere, and the box sits on "Checking..." for good.
+    const field = document.getElementById("domain");
+    if (seq !== dnsPrecheckSeq || ((field && field.value) || "").trim() !== domain) return;
+    renderDns(out, result, true);
     LAST_DNS = { domain: domain, result: result };
   } catch (e) {
     if (seq !== dnsPrecheckSeq) return;
-    box.className = "res-dns-status dns-warn";
-    box.innerHTML = `<div class="dns-head"><span class="dns-badge">Not checked</span>
+    out.className = "res-dns-status dns-warn";
+    out.innerHTML = `<div class="dns-head"><span class="dns-badge">Not checked</span>
         <code>${esc(domain)}</code></div>
       <p>The DNS check could not be completed. This does not affect provisioning.</p>`;
     LAST_DNS = { domain: null, result: null };
