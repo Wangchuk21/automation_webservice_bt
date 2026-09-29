@@ -270,21 +270,23 @@ class TestTheEmailSaysWhatWasVerified(unittest.TestCase):
     state the values that were actually observed, not the ones requested."""
 
     def _text(self, kind, observed):
-        return notifier._forwarding_text("wank.bt", kind, "198.51.100.9", observed)
+        return notifier.forwarding_text("wank.bt", kind, "198.51.100.9", observed)
 
-    def test_a_record_wording_says_it_is_live(self):
+    def test_a_record_wording_shows_the_address(self):
         t = self._text("a", ["198.51.100.9"])
         self.assertIn("wank.bt", t)
         self.assertIn("198.51.100.9", t)
 
-    def test_nameserver_wording_says_delegated(self):
+    def test_nameserver_wording_shows_the_delegation(self):
         t = self._text("nameserver", ["ns1.theirhost.com"])
-        self.assertIn("delegated", t)
-        self.assertNotIn("visitors who type", t.lower())
+        self.assertIn("name server ns1.theirhost.com", t)
+        self.assertIn("host -t ns wank.bt", t)
 
     def test_it_does_not_claim_an_address_it_did_not_see(self):
+        """With nothing verified there is no evidence to show, and an invented
+        one would be the whole problem this feature exists to avoid."""
         t = self._text("a", [])
-        self.assertNotIn("resolves to .", t, "must not invent a resolved address")
+        self.assertNotIn("has address", t)
 
 
 if __name__ == "__main__":
@@ -571,3 +573,139 @@ class TestEveryActionIsRecorded(unittest.TestCase):
                             f"{keep} was removed -- it is the formal record, "
                             f"and the activity feed does not replace it")
         self.assertIn("are not replaced by this list", self.js)
+
+
+class TestTheEmailIsEditableBeforeItIsSent(unittest.TestCase):
+    """
+    The wording goes to a customer, so it has to be readable and changeable
+    before it does. The default matches the format BT already uses, including
+    the lookup output, so what the customer reads is the same evidence the
+    operator was shown.
+
+    What the operator may change is the prose. The gate is not theirs to lift:
+    the server still refuses unless a check has passed, whatever is typed.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        root = Path(__file__).resolve().parent.parent
+        cls.js = (root / "static" / "js" / "app.js").read_text()
+        cls.html = (root / "templates" / "index.html").read_text()
+        cls.app = (root / "app.py").read_text()
+
+    def test_the_default_matches_the_house_format(self):
+        from notifier import forwarding_text
+        body = forwarding_text("dewachen.bt", "nameserver", "ns1.vercel-dns.com",
+                               ["ns1.vercel-dns.com", "ns2.vercel-dns.com"])
+        self.assertIn("host -t ns dewachen.bt", body)
+        self.assertIn("dewachen.bt name server ns1.vercel-dns.com.", body)
+        self.assertIn("dewachen.bt name server ns2.vercel-dns.com.", body)
+        self.assertIn("Regards", body)
+
+    def test_an_a_record_forwarding_shows_its_address(self):
+        from notifier import forwarding_text
+        body = forwarding_text("wank.bt", "a", "198.51.100.9", ["198.51.100.9"])
+        self.assertIn("198.51.100.9", body)
+        self.assertNotIn("name server", body)
+
+    def test_the_evidence_shown_is_the_verified_values(self):
+        """Not the ones that were requested. Those are what BT said they set;
+        these are what DNS actually says."""
+        from notifier import forwarding_text
+        body = forwarding_text("wank.bt", "a", "198.51.100.9", ["203.0.113.5"])
+        self.assertIn("203.0.113.5", body)
+        self.assertNotIn("198.51.100.9", body)
+
+    def test_an_edited_body_is_what_gets_sent(self):
+        from unittest.mock import patch
+        from notifier import send_forwarding_confirmation
+        with patch("notifier._deliver") as deliver, \
+             patch("notifier.settings.SMTP_ENABLED", True), \
+             patch("notifier.settings.SMTP_HOST", "mail.bt"), \
+             patch("notifier.settings.SMTP_SSL", True), \
+             patch("notifier.settings.SMTP_FROM_EMAIL", "hosting@bt.bt"), \
+             patch("notifier.settings.SMTP_FROM_NAME", "Web Hosting Support"), \
+             patch("notifier.settings.SMTP_CC_EMAIL", ""):
+            ok, _ = send_forwarding_confirmation(
+                "wank.bt", "k@x.bt", "a", "198.51.100.9", ["198.51.100.9"],
+                body="Operator's own wording.", subject="Custom subject")
+        self.assertTrue(ok)
+        msg = deliver.call_args[0][0]
+        sent = msg.as_string()
+        self.assertIn("Custom subject", sent)
+        # The body is base64 in a multipart message; get_payload(decode=True)
+        # already decodes it, so decoding again would throw.
+        parts = msg.get_payload()
+        bodies = "".join(
+            p.get_payload(decode=True).decode("utf-8")
+            for p in parts if p.get_content_type() == "text/plain")
+        self.assertIn("Operator's own wording", bodies)
+
+    def test_the_preview_endpoint_sends_nothing(self):
+        self.assertIn("email-preview", self.app)
+        body = self.app.split("def preview_domain_email(")[1].split("\n@app.")[0]
+        self.assertNotIn("send_forwarding_confirmation", body)
+
+    def test_the_preview_uses_the_check_when_there_is_none_yet(self):
+        """Otherwise the body would have an empty evidence section, which reads
+        as a forwarding that went nowhere."""
+        body = self.app.split("def preview_domain_email(")[1].split("\n@app.")[0]
+        self.assertIn("check_forwarding(", body)
+
+    def test_the_editor_exists_and_sends_what_is_typed(self):
+        self.assertIn('id="ds-email-editor"', self.html)
+        self.assertIn('id="ds-email-body"', self.html)
+        self.assertTrue('id="ds-email-subject"' in self.html)
+        self.assertTrue("body," in self.js or "body }" in self.js,
+                        "the editor must post the body the operator typed")
+        self.assertTrue("Reset to the standard wording" in self.html,
+                        "the operator needs a way back to the default wording")
+        self.assertTrue("emailDefault" in self.js, "reset does nothing without it")
+
+    def test_editing_cannot_bypass_the_server_gate(self):
+        """The client sends the body; the server still checks the state first,
+        so an edited email cannot get out before verification."""
+        body = self.app.split("def notify_domain_service(")[1].split("\n@app.")[0]
+        self.assertLess(body.index('!= VERIFIED'), body.index("send_forwarding_confirmation"),
+                        "the gate must be checked before the send, not after")
+
+    def test_an_edited_body_is_never_paired_with_generated_html(self):
+        """
+        Found by the test above, not by reading the code.
+
+        The plain-text part took the operator's wording while the HTML
+        alternative still said "it is now live and resolves to ..." -- so the
+        same email said two different things depending on which part the
+        customer's mail client rendered.
+        """
+        from unittest.mock import patch
+        from notifier import send_forwarding_confirmation
+        with patch("notifier._deliver") as deliver, \
+             patch("notifier.settings.SMTP_ENABLED", True), \
+             patch("notifier.settings.SMTP_HOST", "mail.bt"), \
+             patch("notifier.settings.SMTP_SSL", True), \
+             patch("notifier.settings.SMTP_FROM_EMAIL", "hosting@bt.bt"), \
+             patch("notifier.settings.SMTP_FROM_NAME", "Web Hosting Support"), \
+             patch("notifier.settings.SMTP_CC_EMAIL", ""):
+            send_forwarding_confirmation("wank.bt", "k@x.bt", "a", "198.51.100.9",
+                                         ["198.51.100.9"],
+                                         body="Our own wording.")
+        types = {p.get_content_type() for p in deliver.call_args[0][0].get_payload()}
+        self.assertEqual(types, {"text/plain"},
+                         "a hand-written message must not be accompanied by a "
+                         "generated HTML version that may contradict it")
+
+    def test_the_default_still_gets_both_parts(self):
+        from unittest.mock import patch
+        from notifier import send_forwarding_confirmation
+        with patch("notifier._deliver") as deliver, \
+             patch("notifier.settings.SMTP_ENABLED", True), \
+             patch("notifier.settings.SMTP_HOST", "mail.bt"), \
+             patch("notifier.settings.SMTP_SSL", True), \
+             patch("notifier.settings.SMTP_FROM_EMAIL", "hosting@bt.bt"), \
+             patch("notifier.settings.SMTP_FROM_NAME", "Web Hosting Support"), \
+             patch("notifier.settings.SMTP_CC_EMAIL", ""):
+            send_forwarding_confirmation("wank.bt", "k@x.bt", "a", "198.51.100.9",
+                                         ["198.51.100.9"])
+        types = {p.get_content_type() for p in deliver.call_args[0][0].get_payload()}
+        self.assertEqual(types, {"text/plain", "text/html"})

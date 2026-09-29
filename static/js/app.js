@@ -1433,6 +1433,15 @@ function initDomainServices() {
 
   document.getElementById("btn-ds-register")
     .addEventListener("click", registerDomainService);
+  document.getElementById("ds-email-send")
+    .addEventListener("click", sendEditedEmail);
+  document.getElementById("ds-email-cancel")
+    .addEventListener("click", closeEmailEditor);
+  document.getElementById("ds-email-reset").addEventListener("click", () => {
+    if (!emailDefault) return;
+    document.getElementById("ds-email-subject").value = emailDefault.subject;
+    document.getElementById("ds-email-body").value = emailDefault.body;
+  });
   document.getElementById("ds-reg-refill")
     .addEventListener("click", () => domainRegistry && domainRegistry.reset());
   document.getElementById("ds_domain").addEventListener("input", () => {
@@ -1537,7 +1546,7 @@ async function loadDomainServiceQueue() {
       <td>${actionable
             ? `<button class="btn btn-secondary btn-sm" onclick="verifyDomain('${esc(r.domain)}')">Check</button>
                ${r.status === "verified"
-                 ? ` <button class="btn btn-primary btn-sm" onclick="notifyDomain('${esc(r.domain)}')">Notify customer</button>`
+                 ? ` <button class="btn btn-primary btn-sm" onclick="openEmailEditor('${esc(r.domain)}')">Notify customer</button>`
                  : ""}`
             : '<span class="muted">told</span>'}</td>
     </tr>`;
@@ -1673,5 +1682,86 @@ async function loadActivity() {
         are not replaced by this list.</p>`;
   } catch (e) {
     box.textContent = e.message;
+  }
+}
+
+// ========================================================
+// FORWARDING EMAIL, BEFORE IT IS SENT
+// The wording is editable, because it goes to a customer. The default is the
+// format BT already uses, including the lookup output, so what the customer
+// reads is the same evidence the operator was shown on the page.
+//
+// What the operator may change is the prose. The gate is not theirs to lift: the
+// server still refuses unless a check has passed, whatever is typed here.
+// ========================================================
+
+let emailFor = null;      // the domain currently being written to
+let emailDefault = null;  // the standard wording, for Reset
+
+async function openEmailEditor(domain) {
+  const box = document.getElementById("ds-email-editor");
+  const res = await fetch("/api/v1/domain-services/email-preview", {
+    method: "POST",
+    headers: apiHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ domain }),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    showToast((data && data.detail) || "Could not build the email", "error");
+    return;
+  }
+  if (!data.to) {
+    showToast("No customer email is recorded for this domain", "error");
+    return;
+  }
+  emailFor = domain;
+  emailDefault = { subject: data.subject, body: data.body };
+  document.getElementById("ds-email-to").textContent = data.to;
+  document.getElementById("ds-email-subject").value = data.subject;
+  document.getElementById("ds-email-body").value = data.body;
+  box.hidden = false;
+  box.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  document.getElementById("ds-email-body").focus();
+}
+
+function closeEmailEditor() {
+  const box = document.getElementById("ds-email-editor");
+  if (box) box.hidden = true;
+  emailFor = null;
+  emailDefault = null;
+}
+
+async function sendEditedEmail() {
+  if (!emailFor) return;
+  const domain = emailFor;
+  const subject = document.getElementById("ds-email-subject").value;
+  const body = document.getElementById("ds-email-body").value;
+  if (!body.trim()) {
+    showToast("The message is empty", "error");
+    return;
+  }
+  if (!window.confirm(
+    `Send this to the customer for ${domain}?\\n\\n`
+    + `It goes to a real customer from ${esc(domain)}'s record, and cannot be unsent.`
+  )) return;
+
+  try {
+    const res = await fetch("/api/v1/domain-services/notify", {
+      method: "POST",
+      headers: apiHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ domain, subject: subject || null, body }),
+    });
+    const data = await res.json();
+    if (res.ok) {
+      showToast(data.message || "Customer notified", "success");
+      closeEmailEditor();
+    } else {
+      // 409 here is the server refusing, and it is the control that matters.
+      showToast((data && data.detail) || `HTTP ${res.status}`, "error");
+    }
+    await loadDomainServiceQueue();
+    await loadActivity();
+  } catch (e) {
+    showToast(e.message, "error");
   }
 }

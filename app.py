@@ -25,7 +25,7 @@ from provisioners.base import (
     validate_renewal_date,
     ValidationError,
 )
-from notifier import send_customer_welcome_email, test_smtp_connection, send_forwarding_confirmation
+from notifier import send_customer_welcome_email, test_smtp_connection, send_forwarding_confirmation, forwarding_subject, forwarding_text
 from nic_client import (
     NICClient, REGISTRY_FIELDS, build_registry_payload, missing_registry_fields,
     registry_field_spec, split_domain_ext,
@@ -1356,8 +1356,52 @@ def verify_domain_service(payload: DomainOnlyRequest):
     return {"success": True, "check": result, "service": entry}
 
 
+class DomainNotifyRequest(BaseModel):
+    domain: str
+    # The operator's own wording, if they changed it. Empty means the house text.
+    subject: Optional[str] = None
+    body: Optional[str] = None
+
+
+@app.post("/api/v1/domain-services/email-preview", dependencies=[Depends(require_api_token)])
+def preview_domain_email(payload: DomainOnlyRequest):
+    """
+    The email as it would be sent, without sending it.
+
+    So the wording can be read, and changed, before it reaches a customer. The
+    default is the format BT already uses, with the check output in it, so what
+    the customer reads is the same evidence the operator was shown.
+    """
+    try:
+        domain = domain_service.normalise_domain(payload.domain)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+    state = domain_service.get_state(domain)
+    if state is None:
+        raise HTTPException(status_code=404,
+                            detail=f"No domain service is recorded for '{domain}'.")
+
+    observed = state.get("observed") or []
+    if not observed:
+        # Without a check there is nothing truthful to put in the body, and an
+        # empty record section would read as a forwarding that went nowhere.
+        result = check_forwarding(domain, state.get("forwarding_kind", ""),
+                                  state.get("forwarding_target", ""))
+        observed = result.get("observed") or []
+    return {
+        "domain": domain,
+        "to": state.get("email", ""),
+        "subject": forwarding_subject(domain),
+        "body": forwarding_text(domain, state.get("forwarding_kind", ""),
+                                state.get("forwarding_target", ""), observed),
+        "verified": bool(observed),
+        "status": state.get("status", ""),
+    }
+
+
 @app.post("/api/v1/domain-services/notify", dependencies=[Depends(require_token_for_destructive)])
-def notify_domain_service(payload: DomainOnlyRequest):
+def notify_domain_service(payload: DomainNotifyRequest):
     """
     Email the customer that their domain has been forwarded.
 
@@ -1405,6 +1449,10 @@ def notify_domain_service(payload: DomainOnlyRequest):
         kind=state.get("forwarding_kind", ""),
         target=state.get("forwarding_target", ""),
         observed=state.get("observed", []),
+        # The operator's wording if they supplied any. The verified values are
+        # still what the check found; only the prose is theirs to change.
+        subject=payload.subject,
+        body=payload.body,
     )
     entry = domain_service.record_notification(domain, sent, message)
     if not sent:

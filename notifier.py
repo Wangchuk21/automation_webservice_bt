@@ -146,28 +146,31 @@ def send_customer_welcome_email(result: ProvisionerResult) -> Tuple[bool, str]:
         return False, f"Failed to send email: {str(e)}"
 
 
-def _forwarding_text(domain: str, kind: str, target: str, observed) -> str:
-    where = ", ".join(str(o) for o in (observed or [])) or "the address it resolves to"
+def forwarding_text(domain: str, kind: str, target: str, observed) -> str:
+    """
+    The body BT already sends for a forwarded domain.
+
+    It shows the operator's own check output rather than a paraphrase, so the
+    customer is looking at the same evidence the page showed before the button
+    was pressed. Kept in the existing house wording so a customer who has had
+    two domains forwarded sees one consistent message from Bhutan Telecom.
+    """
+    lines = [f"Dear Customer,", "", f"Your domain {domain} has been successfully "
+             f"forwarded as follows", ""]
     if kind == "nameserver":
-        how = (f"{domain} has been delegated to {where}. Any changes you make at "
-               f"{target} will now apply to this domain.")
+        lines.append(f"host -t ns {domain}")
+        for ns in (observed or []):
+            lines.append(f"{domain} name server {ns}.")
     else:
-        how = (f"{domain} is now live and resolves to {where}. Visitors who type "
-               f"your domain will reach the site at that address.")
-    return f"""Dear Customer,
+        lines.append(f"host {domain}")
+        for ip in (observed or []):
+            lines.append(f"{domain} has address {ip}.")
+    lines += ["", "Regards", ""]
+    return "\n".join(lines)
 
-Your domain {domain} has been registered with Bhutan Telecom and the
-forwarding you requested is now complete.
 
-{how}
-
-If you have any questions, please reply to this email or contact
-{settings.SMTP_FROM_NAME} at {settings.SMTP_FROM_EMAIL}.
-
-Kind regards,
-{settings.SMTP_FROM_NAME}
-Bhutan Telecom
-"""
+def forwarding_subject(domain: str) -> str:
+    return f"Your domain {domain} is now forwarded - {settings.SMTP_FROM_NAME}"
 
 
 def send_forwarding_confirmation(
@@ -176,6 +179,8 @@ def send_forwarding_confirmation(
     kind: str,
     target: str,
     observed=None,
+    subject: Optional[str] = None,
+    body: Optional[str] = None,
 ) -> Tuple[bool, str]:
     """
     Tell a customer their domain has been forwarded.
@@ -195,7 +200,7 @@ def send_forwarding_confirmation(
 
     try:
         msg = MIMEMultipart("alternative")
-        msg["Subject"] = f"Your domain {domain} is now live - {settings.SMTP_FROM_NAME}"
+        msg["Subject"] = (subject or forwarding_subject(domain)).strip()
         msg["From"] = f"{settings.SMTP_FROM_NAME} <{settings.SMTP_FROM_EMAIL}>"
         msg["To"] = email
         recipients = [email]
@@ -205,7 +210,19 @@ def send_forwarding_confirmation(
                 if cc_addr not in recipients:
                     recipients.append(cc_addr)
 
-        msg.attach(MIMEText(_forwarding_text(domain, kind, target, observed), "plain", "utf-8"))
+        # The operator's own wording if they supplied any, else the house text.
+        custom = (body or "").strip()
+        text = custom or forwarding_text(domain, kind, target, observed)
+        msg.attach(MIMEText(text, "plain", "utf-8"))
+        if custom:
+            # Plain text only. Pairing a hand-written message with a generated
+            # HTML alternative meant the customer read "it is now live and
+            # resolves to ..." in one part of the email and whatever the
+            # operator actually wrote in the other. Two versions of the same
+            # message, saying different things.
+            _deliver(msg, recipients)
+            cc_info = f" (CC: {settings.SMTP_CC_EMAIL})" if settings.SMTP_CC_EMAIL else ""
+            return True, f"Forwarding confirmation sent to {email}{cc_info}."
         html = (
             f"<p>Dear Customer,</p>"
             f"<p>Your domain <strong>{domain}</strong> has been registered with Bhutan "

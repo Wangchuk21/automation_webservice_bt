@@ -497,6 +497,39 @@
         only sent when that is true.
       </p>
       <div id="ds-queue">Loading&hellip;</div>
+
+      <!-- The email, before it is sent. Shown so the wording can be read, and
+           changed, before it reaches a customer. Defaults to the format BT
+           already uses, with the check output in it. -->
+      <div id="ds-email-editor" class="ds-email-editor" hidden>
+        <h4 class="docs-box-title">Email to <span id="ds-email-to"></span></h4>
+        <div class="form-group">
+          <label class="form-label" for="ds-email-subject">Subject</label>
+          <div class="input-wrapper">
+            <input type="text" id="ds-email-subject" autocomplete="off">
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="ds-email-body">Message</label>
+          <div class="input-wrapper">
+            <textarea id="ds-email-body" rows="12" spellcheck="false"></textarea>
+          </div>
+          <span class="form-hint">
+            Edit anything you like. The lines showing the lookup are the evidence the
+            forwarding was checked &mdash; keep them unless you are deliberately
+            telling the customer something else.
+          </span>
+        </div>
+        <div class="ds-email-actions">
+          <button type="button" class="btn btn-secondary btn-sm" id="ds-email-reset">
+            Reset to the standard wording
+          </button>
+          <button type="button" class="btn btn-primary btn-sm" id="ds-email-send">
+            Send to customer
+          </button>
+          <button type="button" class="btn btn-ghost btn-sm" id="ds-email-cancel">Cancel</button>
+        </div>
+      </div>
     </section>
 
     <section class="card docs-card" id="dns-check">

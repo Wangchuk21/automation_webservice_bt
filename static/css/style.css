@@ -1570,3 +1570,36 @@ select.custom-select:focus {
 .act-ok   { color: #6ee7b7; background: rgba(16, 185, 129, 0.14); }
 .act-warn { color: #fcd34d; background: rgba(251, 191, 36, 0.14); }
 .act-info { color: #93c5fd; background: rgba(59, 130, 246, 0.14); }
+
+/* The forwarding email, editable before it is sent. */
+.ds-email-editor {
+  margin-top: 16px;
+  padding: 14px;
+  border: 1px solid var(--primary);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+}
+.ds-email-editor .docs-box-title { margin-bottom: 10px; }
+.ds-email-editor textarea {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-color);
+  background: var(--bg-card);
+  color: var(--text-main);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  resize: vertical;
+}
+.ds-email-editor textarea:focus,
+.ds-email-editor input:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+.ds-email-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
