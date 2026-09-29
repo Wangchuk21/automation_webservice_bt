@@ -326,16 +326,24 @@ class DirectAdminProvisioner(BaseProvisioner):
         confirm: bool = False
     ) -> Dict[str, Any]:
         """
-        Suspend a DirectAdmin account via CMD_API_MODIFY_USER.
+        Record a DirectAdmin suspension. The suspension itself is manual.
 
-        Refuses without confirm=True, and refuses when the account is already
-        suspended so that an existing reason -- abuse, spam, user_bandwidth --
-        is never overwritten with "billing". Overwriting would destroy the
-        only record of why a customer was shut off.
+        DirectAdmin has no API for this. Its own published specification, served
+        by the panel at /static/swagger.json, lists 272 endpoints and not one of
+        them suspends, unsuspends or unlocks a user. An earlier version of this
+        method called CMD_API_MODIFY_USER with suspended=yes, which was inferred
+        from the binary rather than from anything that worked: the API rejects
+        the parameter and answers "If you are trying to view the user settings,
+        use: API_SHOW_USER_CONFIG", because it is being read as a read-only call.
 
-        Returns success=False with already_suspended=True when the account was
-        left alone for that reason, so callers can distinguish "did nothing on
-        purpose" from "failed".
+        So this records the intent and tells the operator what to do in the
+        panel, the same shape as a DirectAdmin surrender. It is not a silent
+        no-op: the state is still read, and an account already suspended keeps
+        its reason and is never relabelled.
+
+        Re-clicking after doing it in the GUI reports "already suspended", so
+        the record is self-correcting rather than needing to be marked done by
+        hand.
         """
         if not confirm:
             return {"success": False, "message": "Refusing to suspend without confirm=True."}
@@ -351,30 +359,15 @@ class DirectAdminProvisioner(BaseProvisioner):
                     "message": f"'{username}' is already suspended "
                                f"(reason: {state['reason'] or 'not recorded'}). Left untouched."}
 
-        try:
-            base = api_base_url(self.host, self.tls_hostname, 2222)
-            resp = requests.get(f"{base}/CMD_API_MODIFY_USER",
-                                auth=(self.api_user, self.api_password),
-                                params={"user": username,
-                                        "suspended": "yes",
-                                        "suspended_reason": reason},
-                                verify=resolve_verify(), timeout=60)
-        except Exception as e:
-            return {"success": False, "message": f"API request failed: {e}"}
-
-        data = urllib.parse.parse_qs(resp.text, keep_blank_values=True)
-        if data.get("error", ["0"])[0] not in ("", "0"):
-            return {"success": False,
-                    "message": f"CMD_API_MODIFY_USER failed: "
-                               f"{(data.get('text') or ['error'])[0][:200]}"}
-
-        after = self.account_state(username)
-        if after is None or not after["suspended"]:
-            return {"success": False,
-                    "message": f"Modify reported no error but '{username}' is not suspended. "
-                               "The suspended parameter may not be what this version expects."}
-        return {"success": True,
-                "message": f"Suspended '{username}' on {self.host}. Reason: {reason}"}
+        return {
+            "success": True,
+            "manual": True,
+            "message": (f"'{username}' is NOT suspended yet. DirectAdmin has no API "
+                        f"for this, so it must be done in the panel: DirectAdmin "
+                        f"admin panel -> User Manager -> {username} -> Suspend, "
+                        f"with the reason '{reason}'. This action is recorded in "
+                        f"the audit log."),
+        }
 
     def allow_sftp_user(self, username: str) -> Dict[str, Any]:
         """
@@ -516,6 +509,45 @@ rm -f "$bak"
         except Exception as e:
             logger.warning(f"Existence check for '{username}' failed: {e}")
             return False
+
+    def activate_account(self, username: str, confirm: bool = False) -> Dict[str, Any]:
+        """
+        Record a DirectAdmin activation. The activation itself is manual.
+
+        DirectAdmin has no API for this -- its own /static/swagger.json lists 272
+        endpoints and none suspend, unsuspend or unlock a user -- so the same
+        applies here as to suspension. The billing-only safety rule is still
+        enforced, because that is the part worth keeping: an account suspended
+        for abuse is refused before it can be recorded for reactivation.
+        """
+        if not confirm:
+            return {"success": False, "message": "Refusing to activate without confirm=True."}
+        if not username or not re.match(r'^[a-zA-Z0-9][a-zA-Z0-9_\-]*$', username):
+            return {"success": False, "message": f"Invalid DirectAdmin username: {username!r}"}
+
+        state = self.account_state(username)
+        if state is None:
+            return {"success": False,
+                    "message": f"Account '{username}' could not be read on {self.host}."}
+        if not state["suspended"]:
+            return {"success": True, "already_active": True,
+                    "message": f"'{username}' is not suspended. Nothing to do."}
+        reason = (state.get("reason") or "").strip().lower()
+        if reason != "billing":
+            return {"success": False, "wrong_reason": True,
+                    "message": f"Refusing to activate '{username}': it is suspended for "
+                               f"'{state.get('reason') or 'an unrecorded reason'}', not billing. "
+                               f"A payment does not clear that. Clear it on the panel first "
+                               f"if it should be reactivated."}
+
+        return {
+            "success": True,
+            "manual": True,
+            "message": (f"'{username}' is still suspended. DirectAdmin has no API for "
+                        f"this, so it must be done in the panel: DirectAdmin admin "
+                        f"panel -> User Manager -> {username} -> UnSuspend. This action "
+                        f"is recorded in the audit log."),
+        }
 
     def delete_account(
         self,

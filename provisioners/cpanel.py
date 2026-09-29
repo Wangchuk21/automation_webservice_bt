@@ -9,9 +9,10 @@ from config import settings
 from .base import (
     BaseProvisioner,
     ProvisionerResult,
+    USERNAME_RE,
     ValidationError,
     generate_secure_password,
-    sanitize_username
+    sanitize_username,
 )
 from .ssh_client import SSHExecutor
 from tls_config import resolve_verify, api_base_url
@@ -584,6 +585,79 @@ class CPanelProvisioner(BaseProvisioner):
                     "message": f"suspendacct reported no error but '{username}' is not suspended."}
         return {"success": True,
                 "message": f"Suspended '{username}' on {self.host}. Reason: {reason}",
+                "raw_response": clean}
+
+    def activate_account(self, username: str, confirm: bool = False) -> Dict[str, Any]:
+        """
+        Lift a billing suspension, putting the customer's website back up.
+
+        The mirror image of suspend_account, and it carries the mirror-image
+        safety rule: only an account suspended for *billing* may be activated.
+        An account suspended for abuse, spam, compromise, bandwidth or
+        surrender is refused, because a payment does not undo any of those and
+        reactivating it would quietly clear a decision somebody else made on
+        purpose.
+
+        State is re-read here rather than trusted from the nightly report, so an
+        account suspended for another reason since the report was written is
+        still refused.
+
+        `unsuspendacct` takes only the user; cPanel has no reason to record on
+        the way back up, which is why this is not simply suspend_account with the
+        sign flipped.
+        """
+        if not confirm:
+            return {"success": False, "message": "Refusing to activate without confirm=True."}
+        username = (username or "").strip().lower()
+        if not USERNAME_RE.match(username):
+            return {"success": False, "message": f"Invalid username: {username!r}"}
+
+        state = self.account_state(username)
+        if state is None:
+            return {"success": False,
+                    "message": f"Account '{username}' could not be read on {self.host}."}
+        if not state["suspended"]:
+            return {"success": True, "already_active": True,
+                    "message": f"'{username}' is not suspended. Nothing to do."}
+        reason = (state.get("reason") or "").strip().lower()
+        if reason != "billing":
+            return {"success": False, "wrong_reason": True,
+                    "message": f"Refusing to activate '{username}': it is suspended for "
+                               f"'{state.get('reason') or 'an unrecorded reason'}', not billing. "
+                               f"Clear that on the panel first if it should be reactivated."}
+
+        cmd = f"whmapi1 --output=json unsuspendacct user={shlex.quote(username)}"
+        sudo_stdin = None
+        if self.ssh_user != "root":
+            if self.ssh_password:
+                cmd = "sudo -S -p '' " + cmd
+                sudo_stdin = self.ssh_password + "\n"
+            else:
+                cmd = "sudo -n " + cmd
+        try:
+            _code, stdout, _stderr = self.ssh.execute(cmd, stdin_data=sudo_stdin)
+        except Exception as e:
+            return {"success": False, "message": f"SSH execution failed: {e}"}
+
+        clean = "\n".join(l for l in stdout.splitlines() if not l.startswith("[sudo]")).strip()
+        if clean:
+            try:
+                meta = json.loads(clean).get("metadata", {})
+                if str(meta.get("result")) == "0":
+                    return {"success": False,
+                            "message": f"unsuspendacct failed: {meta.get('reason', clean[:200])}"}
+            except json.JSONDecodeError:
+                pass
+
+        # whmapi1 reports failure in JSON with exit code 0, so confirm the
+        # account is actually usable rather than trusting the reply.
+        after = self.account_state(username)
+        if after is None or after["suspended"]:
+            return {"success": False,
+                    "message": f"unsuspendacct reported no error but '{username}' "
+                               f"is still suspended."}
+        return {"success": True,
+                "message": f"Activated '{username}' on {self.host}. Its website is back up.",
                 "raw_response": clean}
 
     def delete_account(

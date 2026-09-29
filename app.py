@@ -850,6 +850,19 @@ async def suspension_report():
         # Everything the run flagged, with its current state attached, so one
         # acted on since the run reads as done rather than silently vanishing.
         "candidates_all": candidates,
+        # Accounts the last run found suspended for billing. These are the
+        # candidates for reactivation once payment arrives. Not live-checked
+        # here -- there are often over a hundred and each check is a round trip
+        # to a panel; the activate endpoint re-reads the account before acting,
+        # exactly as the suspend endpoint does, so a stale entry cannot cause a
+        # wrong action.
+        "activatable": [
+            {"panel": d.get("panel", ""), "username": d.get("username", ""),
+             "domain": d.get("domain", ""), "contract": d.get("contract", ""),
+             "reason": d.get("reason", "")}
+            for d in rec.get("decisions", [])
+            if d.get("action") == SKIP_ALREADY_BILLING
+        ],
         "already_suspended_billing": counts.get(SKIP_ALREADY_BILLING, 0),
         "suspended_other_reason": counts.get(SKIP_OTHER_REASON, 0),
         "no_match": counts.get(SKIP_NO_MATCH, 0),
@@ -907,7 +920,73 @@ async def suspend_account_now(
     if not result.get("success"):
         raise HTTPException(status_code=500, detail=result.get("message", "Suspension failed."))
 
-    return {"success": True, "message": result.get("message", ""),
+    # DirectAdmin cannot be suspended through an API at all, so the result is a
+    # recorded instruction rather than a completed action. It is passed through
+    # rather than turned into a 500, because nothing has failed -- and the
+    # operator needs to see the steps, not an error.
+    return {"success": True, "manual": bool(result.get("manual")),
+            "message": result.get("message", ""),
+            "panel": panel_norm, "username": username, "domain": state.get("domain", "")}
+
+
+@app.post("/api/v1/suspension/activate", dependencies=[Depends(require_token_for_destructive)])
+async def activate_account_now(
+    panel: str = Form(...),
+    username: str = Form(...),
+    confirm: bool = Form(False),
+):
+    """
+    Re-activate one account suspended for billing, after re-checking its state.
+
+    Refuses anything suspended for a different reason. This is the important
+    part: an account taken down for abuse, spam or compromise must not come
+    back because someone paid an invoice. Only a billing suspension is lifted,
+    and the reason is re-read from the panel rather than taken from the
+    nightly report, so an account suspended for something else since the report
+    was written is still refused.
+    """
+    if not confirm:
+        raise HTTPException(status_code=400,
+                            detail="Activation is live: send confirm=true.")
+
+    try:
+        username = validate_username(username)
+    except ValidationError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+    panel_norm = panel.lower().strip()
+    if panel_norm in ("cpanel", "whm"):
+        prov = get_cpanel_provisioner()
+    elif panel_norm in ("directadmin", "da"):
+        prov = get_da_provisioner()
+    else:
+        raise HTTPException(status_code=400, detail="Invalid panel.")
+
+    state = prov.account_state(username)
+    if state is None:
+        raise HTTPException(status_code=404,
+                            detail=f"Account '{username}' was not found on {panel_norm}.")
+    if not state["suspended"]:
+        # Already up. Not an error, so a double-click cannot raise an alarm.
+        return {"success": True, "already_active": True, "panel": panel_norm,
+                "username": username, "domain": state.get("domain", ""),
+                "message": f"'{username}' is not suspended. Nothing to do."}
+    if (state.get("reason") or "").strip().lower() != "billing":
+        raise HTTPException(
+            status_code=409,
+            detail=(f"Refusing to activate '{username}': it is suspended for "
+                    f"'{state.get('reason') or 'an unrecorded reason'}', not billing. "
+                    f"A payment does not clear that. Reactivation here is only for "
+                    f"billing suspensions."),
+        )
+
+    result = prov.activate_account(username, confirm=True)
+    if not result.get("success"):
+        raise HTTPException(status_code=500, detail=result.get("message", "Activation failed."))
+
+    return {"success": True, "manual": bool(result.get("manual")),
+            "already_active": bool(result.get("already_active")),
+            "message": result.get("message", ""),
             "panel": panel_norm, "username": username, "domain": state.get("domain", "")}
 
 

@@ -234,6 +234,7 @@ async function loadSuspensionReport() {
 
     renderSuspensionCandidates(d.candidates || [], d.candidates_all || []);
     renderUnmatched(d.unmatched_contracts || []);
+    renderActivatable(d.activatable || []);
   } catch (e) {
     summary.textContent = e.message;
   }
@@ -292,6 +293,86 @@ function renderUnmatched(rows) {
     </tr>`).join("")}</tbody></table>`;
 }
 
+function renderActivatable(rows) {
+  const box = document.getElementById("suspension-activatable");
+  if (!box) return;
+  if (!rows.length) {
+    box.innerHTML = '<span class="form-hint">None — no accounts are suspended for '
+                    + 'billing.</span>';
+    return;
+  }
+  box.innerHTML = `<table class="surrender-table">
+    <thead><tr><th>Panel</th><th>Account</th><th>Domain</th><th>Suspended for</th>
+      <th>Action</th></tr></thead>
+    <tbody>${rows.map((r) => `<tr>
+      <td>${esc(r.panel)}</td>
+      <td>${esc(r.username)}</td>
+      <td><strong>${esc(r.domain)}</strong></td>
+      <td><span class="pill pill-pending">${esc(r.reason || "billing")}</span></td>
+      <td><button class="btn btn-secondary btn-sm"
+            onclick="activateNow('${esc(r.panel)}','${esc(r.username)}')">Activate</button></td>
+    </tr>`).join("")}</tbody></table>
+    <p class="form-hint">${rows.length} account(s) from the last run. The reason is
+      re-checked on the panel before anything is activated.</p>`;
+}
+
+// Put a customer's website back up after payment.
+//
+// The warning is deliberately specific: the server will refuse anything not
+// suspended for billing, and this says so before the click rather than after.
+async function activateNow(panel, username) {
+  if (!window.confirm(
+    `Activate ${username} on ${panel}?\n\nThis makes the customer's website live again. `
+    + `Only accounts suspended for billing can be activated -- one suspended for `
+    + `abuse, spam or compromise is refused by the server.`
+  )) {
+    return;
+  }
+
+  const fd = new FormData();
+  fd.append("panel", panel);
+  fd.append("username", username);
+  fd.append("confirm", "true");
+
+  const box = document.getElementById("suspension-result");
+  box.classList.remove("hidden");
+  box.innerHTML = '<span class="form-hint">Working…</span>';
+
+  try {
+    const res = await fetch("/api/v1/suspension/activate", {
+      method: "POST",
+      headers: apiHeaders(),
+      body: fd,
+    });
+    const data = await res.json();
+    if (res.ok) {
+      const manual = !!data.manual;
+      const already = !!data.already_active;
+      const heading = already ? "Already active"
+        : (manual ? "Recorded — action needed" : "Activated");
+      box.className = `surrender-result ${manual ? "surrender-step-warn" : "surrender-step-ok"}`;
+      box.innerHTML = `<h4>${heading}</h4><p>${esc(data.message)}</p>`;
+      showToast(manual ? "Recorded — do it in the DirectAdmin panel"
+                       : (already ? `${username} is already active`
+                                  : `${username} is back online`),
+                manual ? "error" : "success");
+    } else {
+      const msg = (data && (data.detail || data.message)) || `HTTP ${res.status}`;
+      // 409 is a refusal, not a failure: the account is suspended for another
+      // reason and the server declined on purpose.
+      const refused = res.status === 409;
+      box.className = `surrender-result ${refused ? "surrender-step-warn" : "surrender-step-fail"}`;
+      box.innerHTML = `<h4>${refused ? "Not activated" : "Failed"}</h4><p>${esc(msg)}</p>`;
+      showToast(refused ? "Refused — not a billing suspension" : "Activation failed",
+                "error");
+    }
+    await loadSuspensionReport();
+  } catch (e) {
+    box.className = "surrender-result surrender-step-fail";
+    box.innerHTML = `<h4>Failed</h4><p>${esc(e.message)}</p>`;
+  }
+}
+
 async function suspendNow(panel, username) {
   if (!window.confirm(
     `Suspend ${username} on ${panel}?\n\nThis takes the customer's website offline. ` +
@@ -319,9 +400,15 @@ async function suspendNow(panel, username) {
     });
     const data = await res.json();
     if (res.ok) {
-      box.className = "surrender-result surrender-step-ok";
-      box.innerHTML = `<h4>Suspended</h4><p>${esc(data.message)}</p>`;
-      showToast(`Suspended ${username}`, "success");
+      // DirectAdmin has no suspension API, so the result is a recorded
+      // instruction. It must not be styled as "done", because the account is
+      // still up until somebody does it in the panel.
+      const manual = !!data.manual;
+      box.className = `surrender-result ${manual ? "surrender-step-warn" : "surrender-step-ok"}`;
+      box.innerHTML = `<h4>${manual ? "Recorded — action needed" : "Suspended"}</h4>`
+        + `<p>${esc(data.message)}</p>`;
+      showToast(manual ? "Recorded — do it in the DirectAdmin panel"
+                       : `Suspended ${username}`, manual ? "error" : "success");
     } else {
       const msg = (data && (data.detail || data.message)) || `HTTP ${res.status}`;
       // 409 is the expected refusal: already suspended, so nothing was changed.
