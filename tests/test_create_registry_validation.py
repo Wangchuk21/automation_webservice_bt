@@ -140,7 +140,7 @@ class TestRegistryFieldsAreCheckedBeforeAnythingIsCreated(unittest.TestCase):
     def test_the_check_precedes_creation_in_the_source(self):
         """A source-level guard, because moving it back is easy and silent."""
         src = (Path(__file__).resolve().parent.parent / "app.py").read_text()
-        body = src.split("async def create_account(payload: AccountCreateRequest):")[1]
+        body = src.split("def create_account(payload: AccountCreateRequest):")[1]
         check = body.index("missing_registry_fields")
         create = body.index("prov.create_account(")
         self.assertLess(check, create,
@@ -152,7 +152,7 @@ class TestThePostCreateStepsStillRunAfterwards(unittest.TestCase):
 
     def test_sudo_steps_and_nic_registration_still_happen(self):
         src = (Path(__file__).resolve().parent.parent / "app.py").read_text()
-        body = src.split("async def create_account(payload: AccountCreateRequest):")[1]
+        body = src.split("def create_account(payload: AccountCreateRequest):")[1]
         self.assertIn("run_post_create_steps(result)", body)
         self.assertIn("register_or_update_domain(", body)
 

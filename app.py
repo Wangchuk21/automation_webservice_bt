@@ -266,7 +266,7 @@ class AccountCreateRequest(BaseModel):
 
 
 @app.get("/", response_class=HTMLResponse)
-async def serve_dashboard(request: Request):
+def serve_dashboard(request: Request):
     return templates.TemplateResponse(
         request,
         "index.html",
@@ -281,7 +281,7 @@ async def serve_dashboard(request: Request):
 
 
 @app.get("/registry-fields", response_class=HTMLResponse)
-async def serve_registry_fields(request: Request):
+def serve_registry_fields(request: Request):
     """
     Reference page for the 23 fields nic.bt.bt requires.
 
@@ -299,19 +299,19 @@ async def serve_registry_fields(request: Request):
 
 
 @app.get("/api/v1/health")
-async def health_check():
+def health_check():
     return {"status": "ok", "service": "automation_webservice_bt"}
 
 
 @app.get("/api/v1/generate-credentials", dependencies=[Depends(require_api_token)])
-async def generate_credentials(domain: Optional[str] = None):
+def generate_credentials(domain: Optional[str] = None):
     pwd = generate_secure_password(16)
     user = sanitize_username(domain) if domain else ""
     return {"suggested_username": user, "suggested_password": pwd}
 
 
 @app.get("/api/v1/packages", dependencies=[Depends(require_api_token)])
-async def get_packages(panel: str = "cpanel"):
+def get_packages(panel: str = "cpanel"):
     if panel in ("cpanel", "whm"):
         prov = get_cpanel_provisioner()
         return {"panel": "cpanel", "packages": prov.list_packages()}
@@ -322,7 +322,7 @@ async def get_packages(panel: str = "cpanel"):
 
 
 @app.get("/api/v1/servers/status", dependencies=[Depends(require_api_token)])
-async def check_servers():
+def check_servers():
     """Test connection to both configured hosting servers."""
     cp_prov = get_cpanel_provisioner()
     da_prov = get_da_provisioner()
@@ -345,14 +345,14 @@ async def check_servers():
 
 
 @app.post("/api/v1/smtp/test", dependencies=[Depends(require_api_token)])
-async def test_smtp(recipient: Optional[str] = None):
+def test_smtp(recipient: Optional[str] = None):
     """Test SMTP connection to Zimbra/mail server, optionally sending a test email."""
     ok, msg = test_smtp_connection(recipient=recipient)
     return {"success": ok, "message": msg, "host": settings.SMTP_HOST, "port": settings.SMTP_PORT}
 
 
 @app.post("/api/v1/accounts/create", dependencies=[Depends(require_api_token)])
-async def create_account(payload: AccountCreateRequest):
+def create_account(payload: AccountCreateRequest):
     panel = payload.panel.lower().strip()
     if panel in ("cpanel", "whm"):
         prov = get_cpanel_provisioner()
@@ -519,7 +519,7 @@ class SurrenderPreviewRequest(BaseModel):
 
 
 @app.post("/api/v1/surrenders/preview", dependencies=[Depends(require_api_token)])
-async def preview_surrender_endpoint(payload: SurrenderPreviewRequest):
+def preview_surrender_endpoint(payload: SurrenderPreviewRequest):
     """
     Report what a surrender would remove, without changing anything.
 
@@ -551,7 +551,7 @@ async def preview_surrender_endpoint(payload: SurrenderPreviewRequest):
 
 
 @app.post("/api/v1/surrenders", dependencies=[Depends(require_token_for_destructive)])
-async def create_surrender(
+def create_surrender(
     request: Request,
     domain: str = Form(...),
     scope: str = Form("both"),
@@ -636,13 +636,13 @@ async def create_surrender(
 
 
 @app.get("/api/v1/surrenders", dependencies=[Depends(require_api_token)])
-async def list_surrenders(limit: int = 100):
+def list_surrenders(limit: int = 100):
     """List recent surrender records, newest first."""
     return {"surrenders": list_audits(limit=max(1, min(limit, 500)))}
 
 
 @app.get("/api/v1/surrenders/{surrender_id}/evidence", dependencies=[Depends(require_api_token)])
-async def download_surrender_evidence(surrender_id: str):
+def download_surrender_evidence(surrender_id: str):
     """Download the surrender letter attached to a record."""
     record = get_audit(surrender_id)
     if not record or not record.get("evidence"):
@@ -719,14 +719,14 @@ class BscsSearchRequest(BaseModel):
 
 
 @app.post("/api/v1/bscs/test", dependencies=[Depends(require_api_token)])
-async def bscs_test_connection():
+def bscs_test_connection():
     """Verify BSCS portal reachability and authentication. Read-only."""
     client = get_bscs_client()
     return client.test_connection()
 
 
 @app.post("/api/v1/bscs/customers/search", dependencies=[Depends(require_api_token)])
-async def bscs_search_customers(payload: BscsSearchRequest):
+def bscs_search_customers(payload: BscsSearchRequest):
     """Search the BSCS customer index. Read-only; nothing is modified."""
     criteria = payload.criteria()
     if not criteria:
@@ -739,7 +739,7 @@ async def bscs_search_customers(payload: BscsSearchRequest):
 
 
 @app.post("/api/v1/bscs/contracts/search", dependencies=[Depends(require_api_token)])
-async def bscs_search_contracts(payload: BscsSearchRequest):
+def bscs_search_contracts(payload: BscsSearchRequest):
     """Search contracts for a customer. Read-only; nothing is modified."""
     criteria = payload.criteria()
     customer_id = criteria.pop("customer_id", None)
@@ -777,7 +777,7 @@ class SuspendRequest(BaseModel):
 
 
 @app.get("/api/v1/suspension/report", dependencies=[Depends(require_api_token)])
-async def suspension_report():
+def suspension_report():
     """
     The most recent detection run: candidates, already-suspended counts, and
     the lapsed contracts that could NOT be matched to an account.
@@ -871,7 +871,7 @@ async def suspension_report():
 
 
 @app.post("/api/v1/suspension/suspend", dependencies=[Depends(require_token_for_destructive)])
-async def suspend_account_now(
+def suspend_account_now(
     panel: str = Form(...),
     username: str = Form(...),
     confirm: bool = Form(False),
@@ -925,7 +925,7 @@ async def suspend_account_now(
 
 
 @app.post("/api/v1/suspension/activate", dependencies=[Depends(require_token_for_destructive)])
-async def activate_account_now(
+def activate_account_now(
     panel: str = Form(...),
     username: str = Form(...),
     confirm: bool = Form(False),
@@ -985,7 +985,7 @@ async def activate_account_now(
 
 
 @app.get("/api/v1/nic/extensions", dependencies=[Depends(require_api_token)])
-async def nic_extensions():
+def nic_extensions():
     """
     The extensions nic.bt.bt accepts, read from the registry's own dropdown.
 
@@ -1005,7 +1005,7 @@ async def nic_extensions():
 
 
 @app.get("/api/v1/dns/check", dependencies=[Depends(require_api_token)])
-async def dns_check(
+def dns_check(
     domain: str,
     panel: str = "cpanel",
     probe: bool = True,
@@ -1039,7 +1039,7 @@ async def dns_check(
 
 
 @app.get("/api/v1/nic/field-spec", dependencies=[Depends(require_api_token)])
-async def nic_field_spec():
+def nic_field_spec():
     """
     Every field nic.bt.bt requires, with where each value comes from.
 
@@ -1051,7 +1051,7 @@ async def nic_field_spec():
 
 
 @app.post("/api/v1/nic/test", dependencies=[Depends(require_api_token)])
-async def test_nic_portal():
+def test_nic_portal():
     """Test login & access to nic.bt.bt registry portal."""
     nic = NICClient()
     ok, msg = nic.login()
@@ -1125,7 +1125,7 @@ class DomainRegisterRequest(BaseModel):
 
 
 @app.post("/api/v1/nic/register", dependencies=[Depends(require_api_token)])
-async def register_nic_domain(payload: DomainRegisterRequest):
+def register_nic_domain(payload: DomainRegisterRequest):
     """Directly register or update a domain on nic.bt.bt."""
     nic = NICClient()
     res = nic.register_or_update_domain(
