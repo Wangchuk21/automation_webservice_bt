@@ -314,14 +314,26 @@ if __name__ == "__main__":
     unittest.main(verbosity=2)
 
 
-def js_function(source: str, name: str) -> str:
-    """The body of one JS function, by brace matching.
+def js_function(source: str, name: str, signature: bool = False) -> str:
+    """One JS function, by brace matching.
 
     Reading a fixed line range out of a script breaks the moment a line is added
     above, and then asserts against the wrong lines while still passing.
+
+    The slice starts at the opening brace, so the signature is excluded. Pass
+    signature=True to get the declaration line as well, for when the parameters
+    are the thing under test.
     """
     start = source.index(f"function {name}(")
-    start = source.index("{", source.index(")", start))
+    brace = source.index("{", source.index(")", start))
+    if signature:
+        # From the start of the line through the opening brace, so the modifiers
+        # ("async") and the parameters are both included. Taking just the line up
+        # to "function" drops the parameters, and the signature then reads "async {".
+        head = source[source.rindex("\n", 0, start) + 1:brace]
+    else:
+        head = ""
+    start = brace
     depth, i = 0, start
     while i < len(source):
         if source[i] == "{":
@@ -329,7 +341,7 @@ def js_function(source: str, name: str) -> str:
         elif source[i] == "}":
             depth -= 1
             if depth == 0:
-                return source[start:i + 1]
+                return head + source[start:i + 1]
         i += 1
     raise AssertionError(f"{name} has no closing brace")
 

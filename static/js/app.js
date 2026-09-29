@@ -1552,8 +1552,8 @@ async function loadDomainServiceQueue() {
             : '<span class="pill pill-pending">not checked</span>'}</td>
       <td>${actionable
             ? `<button class="btn btn-secondary btn-sm" onclick="verifyDomain('${esc(r.domain)}')">Check</button>
-               ${r.status === "verified"
-                 ? ` <button class="btn btn-primary btn-sm" onclick="openEmailEditor('${esc(r.domain)}')">Notify customer</button>`
+               ${r.service === "forwarding"
+                 ? ` <button class="btn btn-primary btn-sm" onclick="notifyDomain(this, '${esc(r.domain)}')">Send confirmation</button>`
                  : ""}`
             : (r.notification && r.notification.body
                 ? `<span class="muted">told</span>
@@ -1602,32 +1602,6 @@ async function verifyDomain(domain) {
 // Tell the customer. The server refuses unless a check has already confirmed the
 // forwarding, so the button is not the only thing standing between a customer
 // and a false claim -- that is enforced on the server, not here.
-async function notifyDomain(domain) {
-  if (!window.confirm(
-    `Email ${domain}'s customer to say their domain is forwarded?\\n\\n`
-    + `This is the only outward-facing step, so it is worth reading the check result `
-    + `above first. If the domain has not been forwarded, the server will refuse.`
-  )) return;
-  try {
-    const res = await fetch("/api/v1/domain-services/notify", {
-      method: "POST",
-      headers: apiHeaders({ "Content-Type": "application/json" }),
-      body: JSON.stringify({ domain }),
-    });
-    const data = await res.json();
-    if (res.ok) {
-      showToast(data.message || "Customer notified", "success");
-    } else {
-      const msg = (data && data.detail) || `HTTP ${res.status}`;
-      showToast(msg, "error");
-    }
-    await loadDomainServiceQueue();
-    await loadActivity();
-  } catch (e) {
-    showToast(e.message, "error");
-  }
-}
-
 // ========================================================
 // RECENT ACTIVITY
 // What has been done. The handover kit shows the result of the action you just
@@ -1854,5 +1828,47 @@ async function showSentEmailForDomain(domain) {
     showSentEmail(domain, data.notification);
   } catch (e) {
     showToast(e.message, "error");
+  }
+}
+
+// ========================================================
+// SENDING THE CONFIRMATION
+// The button used to appear only once the status was already "verified", which
+// a freshly registered domain never is -- it starts at "awaiting_dns". So the
+// only way to get it was to press Check, notice the row change, and then find
+// the button that had not been there a moment earlier. The gate was right; the
+// flow was not.
+//
+// Pressing Send now checks first, and opens the editor only if the forwarding
+// is real. The server refuses an unverified notify regardless of what this does,
+// so the sequence is a convenience, never the control.
+async function notifyDomain(btn, domain) {
+  if (btn) { btn.disabled = true; btn.textContent = "Checking…"; }
+  try {
+    const res = await fetch("/api/v1/domain-services/verify", {
+      method: "POST",
+      headers: apiHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ domain }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      showToast((data && data.detail) || "Check failed", "error");
+      await loadDomainServiceQueue();
+      return;
+    }
+    if (data.check.status !== "forwarded") {
+      // Say exactly what is wrong, and where it is wrong, so the operator can
+      // go and fix it rather than wondering why nothing happened.
+      showToast(`Not sending: ${data.check.message}`, "error");
+      await loadDomainServiceQueue();
+      await loadActivity();
+      return;
+    }
+    await loadDomainServiceQueue();
+    await openEmailEditor(domain);
+  } catch (e) {
+    showToast(e.message, "error");
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = "Send confirmation"; }
   }
 }

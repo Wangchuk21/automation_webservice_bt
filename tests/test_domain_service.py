@@ -816,3 +816,63 @@ class TestTheSentEmailIsVisible(unittest.TestCase):
     def test_sending_leaves_the_email_on_screen(self):
         """It is the only copy. Closing the box left nothing to read."""
         self.assertIn("showSentEmail(domain, data.sent)", self.js)
+
+
+class TestTheSendButtonIsThere(unittest.TestCase):
+    """
+    Reported as "there is no sent button on Domain Service again".
+
+    The button rendered only when the row's status was already "verified", and a
+    freshly registered forwarding domain starts at "awaiting_dns" -- so the only
+    way to see it was to press Check, watch the row change, and notice a button
+    that had not been there a moment earlier. The gate was correct; the flow
+    looked broken.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        root = Path(__file__).resolve().parent.parent
+        cls.js = (root / "static" / "js" / "app.js").read_text()
+
+    def _queue(self):
+        return js_function(self.js, "loadDomainServiceQueue")
+
+    def test_a_forwarding_domain_always_offers_the_send_button(self):
+        """Not gated on the status: an unverified domain shows the button and is
+        told why it cannot send yet."""
+        body = self._queue()
+        self.assertIn("Send confirmation", body)
+        self.assertNotIn('r.status === "verified"\n                 ?', body,
+                         "the button must not depend on the row already being verified")
+
+    def test_a_hosting_domain_is_not_offered_a_forwarding_email(self):
+        """There is no forwarding to confirm for a hosted domain, and the server
+        refuses it."""
+        body = self._queue()
+        self.assertIn('r.service === "forwarding"', body)
+
+    def test_sending_checks_first(self):
+        """Otherwise the operator gets a bare 409 and no idea what to do next."""
+        body = js_function(self.js, "notifyDomain")
+        self.assertLess(body.index("verify"), body.index("openEmailEditor"))
+
+    def test_it_explains_a_failed_check_instead_of_going_quiet(self):
+        body = js_function(self.js, "notifyDomain")
+        self.assertIn("Not sending:", body)
+        self.assertIn("data.check.message", body)
+
+    def test_the_editor_still_only_opens_on_a_real_forwarding(self):
+        body = js_function(self.js, "notifyDomain")
+        self.assertIn('data.check.status !== "forwarded"', body)
+
+    def test_only_one_notify_function_exists(self):
+        """A second definition silently wins, and the button would call the wrong
+        one."""
+        self.assertEqual(self.js.count("async function notifyDomain("), 1,
+                         "there are two notifyDomain definitions")
+
+    def test_the_button_is_passed_in_rather_than_taken_from_a_global(self):
+        body = js_function(self.js, "notifyDomain", signature=True)
+        self.assertIn("async function notifyDomain(btn, domain)", body)
+        self.assertNotIn("event.target", body,
+                         "the implicit `event` global is not dependable here")
