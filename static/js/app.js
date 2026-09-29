@@ -1555,7 +1555,10 @@ async function loadDomainServiceQueue() {
                ${r.status === "verified"
                  ? ` <button class="btn btn-primary btn-sm" onclick="openEmailEditor('${esc(r.domain)}')">Notify customer</button>`
                  : ""}`
-            : '<span class="muted">told</span>'}</td>
+            : (r.notification && r.notification.body
+                ? `<span class="muted">told</span>
+                   <button class="btn btn-ghost btn-sm" onclick="showSentEmailForDomain('${esc(r.domain)}')">View sent email</button>`
+                : '<span class="muted">told</span>')}</td>
     </tr>`;
 
     box.innerHTML = `<table class="surrender-table">
@@ -1723,7 +1726,22 @@ async function openEmailEditor(domain) {
   }
   emailFor = domain;
   emailDefault = { subject: data.subject, body: data.body };
-  document.getElementById("ds-email-to").textContent = data.to;
+  // Clear any read-only state left by viewing a past email, or the next domain
+  // to be notified gets an uneditable box with the send button still hidden.
+  const heading = box.querySelector(".docs-box-title");
+  if (heading) {
+    heading.innerHTML = `Email to <span class="ds-sent-to">${esc(data.to)}</span>`;
+  }
+  for (const el of ["ds-email-subject", "ds-email-body"]) {
+    const input = document.getElementById(el);
+    if (input) input.readOnly = false;
+  }
+  for (const id of ["ds-email-send", "ds-email-reset"]) {
+    const btn = document.getElementById(id);
+    if (btn) btn.hidden = false;
+  }
+  const cancel = document.getElementById("ds-email-cancel");
+  if (cancel) cancel.textContent = "Cancel";
   document.getElementById("ds-email-subject").value = data.subject;
   document.getElementById("ds-email-body").value = data.body;
   box.hidden = false;
@@ -1761,13 +1779,79 @@ async function sendEditedEmail() {
     const data = await res.json();
     if (res.ok) {
       showToast(data.message || "Customer notified", "success");
-      closeEmailEditor();
+      // The editor's contents are already what was sent, so leave it on screen
+      // read-only instead of closing it. Reloading the page would have been the
+      // only other way to see the wording, and it is not kept anywhere else.
+      if (data.sent) showSentEmail(domain, data.sent);
     } else {
       // 409 here is the server refusing, and it is the control that matters.
       showToast((data && data.detail) || `HTTP ${res.status}`, "error");
     }
     await loadDomainServiceQueue();
     await loadActivity();
+  } catch (e) {
+    showToast(e.message, "error");
+  }
+}
+
+// ========================================================
+// THE EMAIL THAT WAS SENT
+// Once it has gone out there is no copy anywhere else: the message left the
+// building and a customer who later disputes what they were told has to be
+// answered from this record. "Told at 14:02" does not say what, or to whom.
+//
+// Read-only. It is a record of what a customer already received, not a draft
+// that can still be changed -- editing it here would suggest it can be.
+// ========================================================
+
+async function showSentEmail(domain, sent) {
+  const box = document.getElementById("ds-email-editor");
+  if (!box) return;
+  const n = sent || null;
+
+  document.getElementById("ds-email-subject").value = n ? n.subject : "";
+  document.getElementById("ds-email-body").value = n ? n.body : "";
+
+  // Rewritten wholesale rather than mutated: the heading holds a span with an
+  // id, and two elements sharing an id makes getElementById pick one at random.
+  const title = box.querySelector(".docs-box-title");
+  if (title) {
+    title.innerHTML = n
+      ? `📤 Sent to <span class="ds-sent-to">${esc(n.to || "no address recorded")}</span>`
+          + (n.edited ? ' <span class="pill pill-pending">edited by operator</span>' : "")
+          + (n.at ? ` <span class="form-hint">at ${esc(n.at.replace("T", " ").slice(0, 19))}</span>` : "")
+      : "Sent email";
+  }
+
+  // Nothing here can be changed and nothing here can be sent again.
+  for (const el of ["ds-email-subject", "ds-email-body"]) {
+    const input = document.getElementById(el);
+    if (input) input.readOnly = true;
+  }
+  for (const id of ["ds-email-send", "ds-email-reset"]) {
+    const btn = document.getElementById(id);
+    if (btn) btn.hidden = true;
+  }
+  const cancel = document.getElementById("ds-email-cancel");
+  if (cancel) cancel.textContent = "Close";
+
+  box.hidden = false;
+  box.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+// Fetch the recorded mail for a domain. Used by the queue button, where the
+// row is all the operator has to go on.
+async function showSentEmailForDomain(domain) {
+  try {
+    const res = await fetch(`/api/v1/domain-services/${encodeURIComponent(domain)}`,
+                           { headers: apiHeaders() });
+    const data = await res.json();
+    if (!res.ok) { showToast((data && data.detail) || `HTTP ${res.status}`, "error"); return; }
+    if (!data.notification) {
+      showToast(`No sent email is recorded for ${domain}`, "error");
+      return;
+    }
+    showSentEmail(domain, data.notification);
   } catch (e) {
     showToast(e.message, "error");
   }

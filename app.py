@@ -1363,6 +1363,28 @@ class DomainNotifyRequest(BaseModel):
     body: Optional[str] = None
 
 
+@app.get("/api/v1/domain-services/{domain}", dependencies=[Depends(require_api_token)])
+def get_domain_service(domain: str):
+    """
+    One recorded domain service, including the email that was sent to the
+    customer if it has been.
+
+    The list endpoint is enough to work the queue, but not to answer "what did
+    we actually tell them" -- and after a send the only copy is the one kept
+    here.
+    """
+    try:
+        domain = domain_service.normalise_domain(domain)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+    state = domain_service.get_state(domain)
+    if state is None:
+        raise HTTPException(status_code=404,
+                            detail=f"No domain service is recorded for '{domain}'.")
+    return state
+
+
 @app.post("/api/v1/domain-services/email-preview", dependencies=[Depends(require_api_token)])
 def preview_domain_email(payload: DomainOnlyRequest):
     """
@@ -1443,18 +1465,34 @@ def notify_domain_service(payload: DomainNotifyRequest):
                     f"customer that their domain is live, when it is not, is "
                     f"worse than not emailing them at all."))
 
+    # Work out what is about to go out, so the same text is recorded as is sent.
+    # Re-deriving it afterwards would risk the record and the message disagreeing
+    # if the default text ever changed.
+    kind = state.get("forwarding_kind", "")
+    final_subject = (payload.subject or "").strip() or forwarding_subject(domain)
+    final_body = ((payload.body or "").strip()
+                  or forwarding_text(domain, kind, state.get("forwarding_target", ""),
+                                     state.get("observed", [])))
+
     sent, message = send_forwarding_confirmation(
         domain=domain,
         email=state.get("email", ""),
-        kind=state.get("forwarding_kind", ""),
+        kind=kind,
         target=state.get("forwarding_target", ""),
         observed=state.get("observed", []),
         # The operator's wording if they supplied any. The verified values are
         # still what the check found; only the prose is theirs to change.
-        subject=payload.subject,
-        body=payload.body,
+        subject=final_subject,
+        body=final_body,
     )
-    entry = domain_service.record_notification(domain, sent, message)
+    entry = domain_service.record_notification(
+        domain, sent, message,
+        subject=final_subject, body=final_body,
+        recipient=state.get("email", ""), kind=kind,
+        edited=bool((payload.body or "").strip()))
     if not sent:
         raise HTTPException(status_code=502, detail=message)
-    return {"success": True, "message": message, "service": entry}
+    # Returned so the operator can see what went out immediately, rather than
+    # only finding out that it did.
+    return {"success": True, "message": message, "service": entry,
+            "sent": entry.get("notification", {})}

@@ -709,3 +709,110 @@ class TestTheEmailIsEditableBeforeItIsSent(unittest.TestCase):
                                          ["198.51.100.9"])
         types = {p.get_content_type() for p in deliver.call_args[0][0].get_payload()}
         self.assertEqual(types, {"text/plain", "text/html"})
+
+
+from tests.test_dns_check import js_function  # noqa: E402
+
+
+class TestTheSentEmailIsKept(unittest.TestCase):
+    """
+    "Told" is not a record.
+
+    Once the email leaves there is no copy anywhere else, and an operator can
+    now change the wording before it goes. A customer who later disputes what
+    they were told has to be answered from what is stored here, and "notified at
+    14:02" does not say what was said, or to which address.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.path = Path(self.tmp.name) / "services.jsonl"
+        p = patch.object(domain_service, "log_path", return_value=self.path)
+        p.start(); self.addCleanup(p.stop)
+        domain_service.record_registration(
+            domain="dewachen.bt", customer_name="Dewachen", email="c@x.bt",
+            service="forwarding", forwarding_kind="nameserver",
+            forwarding_target="ns1.vercel-dns.com", registry_action="created")
+        domain_service.get_state("dewachen.bt")["observed"] = ["ns1.vercel-dns.com"]
+
+    def test_the_email_body_is_stored(self):
+        from notifier import forwarding_subject, forwarding_text
+        body = forwarding_text("dewachen.bt", "nameserver", "ns1.vercel-dns.com",
+                               ["ns1.vercel-dns.com"])
+        domain_service.record_notification(
+            "dewachen.bt", True, "Sent", subject=forwarding_subject("dewachen.bt"),
+            body=body, recipient="c@x.bt", kind="nameserver")
+        got = domain_service.get_state("dewachen.bt")["notification"]
+        self.assertEqual(got["body"], body)
+        self.assertEqual(got["to"], "c@x.bt")
+        self.assertIn("subject", got)
+        self.assertTrue(got["at"])
+
+    def test_an_edited_email_is_marked_as_one(self):
+        """The one worth a second look: wording a colleague chose by hand."""
+        domain_service.record_notification(
+            "dewachen.bt", True, "Sent", subject="s", body="Our own wording.",
+            recipient="c@x.bt", kind="nameserver", edited=True)
+        self.assertTrue(domain_service.get_state("dewachen.bt")["notification"]["edited"])
+
+    def test_the_standard_wording_is_not_marked_as_edited(self):
+        from notifier import forwarding_subject, forwarding_text
+        body = forwarding_text("dewachen.bt", "nameserver", "ns1.vercel-dns.com",
+                               ["ns1.vercel-dns.com"])
+        # edited=False is what the endpoint passes when no body was supplied.
+        domain_service.record_notification(
+            "dewachen.bt", True, "Sent", subject=forwarding_subject("dewachen.bt"),
+            body=body, recipient="c@x.bt", kind="nameserver", edited=False)
+        self.assertFalse(domain_service.get_state("dewachen.bt")["notification"]["edited"])
+        # And it must not depend on regenerating the default from stored state.
+        self.assertNotIn("forwarding_text", domain_service.record_notification.__doc__ or "")
+
+    def test_a_failed_send_is_not_recorded_as_a_sent_email(self):
+        """Otherwise a later review would show a customer an email that never
+        reached them."""
+        domain_service.record_notification(
+            "dewachen.bt", False, "SMTP refused", body="would have gone here",
+            recipient="c@x.bt", kind="nameserver")
+        self.assertNotIn("notification", domain_service.get_state("dewachen.bt"))
+
+    def test_the_record_survives_a_later_read(self):
+        domain_service.record_notification(
+            "dewachen.bt", True, "Sent", subject="s", body="The text.",
+            recipient="c@x.bt", kind="nameserver")
+        again = domain_service.get_state("dewachen.bt")
+        self.assertEqual(again["notification"]["body"], "The text.")
+
+
+class TestTheSentEmailIsVisible(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        root = Path(__file__).resolve().parent.parent
+        cls.js = (root / "static" / "js" / "app.js").read_text()
+        cls.app = (root / "app.py").read_text()
+
+    def test_a_notified_domain_offers_the_email(self):
+        self.assertIn("View sent email", self.js)
+
+    def test_the_saved_email_can_be_fetched(self):
+        """The queue row is all the operator has to go on, so there has to be a
+        way to ask for the mail behind it."""
+        self.assertIn("/api/v1/domain-services/{domain}", self.app)
+
+    def test_the_record_is_read_only(self):
+        """It is what a customer already received, not a draft that can still be
+        changed. An editable box would imply it can."""
+        body = js_function(self.js, "showSentEmail")
+        self.assertIn("readOnly = true", body)
+        self.assertIn("ds-email-send", body)
+
+    def test_a_new_draft_clears_the_read_only_state(self):
+        """Otherwise the next domain to notify gets a locked box with the send
+        button still hidden, and the queue looks permanently finished."""
+        body = js_function(self.js, "openEmailEditor")
+        self.assertIn("readOnly = false", body)
+        self.assertIn("ds-email-send", body)
+
+    def test_sending_leaves_the_email_on_screen(self):
+        """It is the only copy. Closing the box left nothing to read."""
+        self.assertIn("showSentEmail(domain, data.sent)", self.js)

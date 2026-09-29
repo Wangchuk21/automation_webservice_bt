@@ -189,8 +189,19 @@ def record_verification(domain: str, result: Dict[str, Any]) -> Dict[str, Any]:
     return entry
 
 
-def record_notification(domain: str, sent: bool, message: str) -> Dict[str, Any]:
-    """Record that the customer was told -- or that the attempt failed."""
+def record_notification(domain: str, sent: bool, message: str,
+                        subject: str = "", body: str = "", recipient: str = "",
+                        kind: str = "", edited: bool = False) -> Dict[str, Any]:
+    """
+    Record that the customer was told -- or that the attempt failed.
+
+    The email itself is kept, not just the fact of it. An operator can now edit
+    the wording before it goes out, and afterwards there is no copy anywhere
+    else: the message left the building, and a customer who later disputes what
+    they were told has to be answered from the record. "Notified at 14:02" says
+    that something was sent; it does not say what, or to whom, or whether the
+    address was one the customer gave us.
+    """
     domain = normalise_domain(domain)
     previous = get_state(domain) or {}
     entry = {
@@ -201,6 +212,19 @@ def record_notification(domain: str, sent: bool, message: str) -> Dict[str, Any]
         "notification_message": message,
         "updated_at": _now(),
     }
+    if sent:
+        entry["notification"] = {
+            "at": entry["notified_at"],
+            "to": recipient,
+            "subject": subject,
+            "body": body,
+            # Whether the operator wrote the wording themselves. Passed in rather
+            # than worked out by regenerating the default here: that depended on
+            # the stored observed values, so a standard email would be mislabelled
+            # as edited whenever they were absent or had changed.
+            "edited": bool(edited),
+            "kind": kind or previous.get("forwarding_kind", ""),
+        }
     append(entry)
     return entry
 
