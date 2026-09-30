@@ -177,6 +177,11 @@ class Config:
     # server and the real function name substituted in ssl_service.
     CPANEL_AUTOSSL_VERIFIED: bool = os.getenv("CPANEL_AUTOSSL_VERIFIED", "false").lower() in ("1", "true", "yes")
 
+    # A Let's Encrypt order is synchronous and can take minutes end to end. The
+    # first guess of 120s was hit on a domain that already held a certificate, so
+    # it was not the hard case.
+    SSL_PROVISION_TIMEOUT_SECONDS: int = int(os.getenv("SSL_PROVISION_TIMEOUT_SECONDS", "420"))
+
     # The cross-cutting "what have we done" feed, shown on the dashboard so a
     # reload does not lose the answer. Under /app/data with the surrender audit
     # trail, on the volume that is already backed up. It does not replace those

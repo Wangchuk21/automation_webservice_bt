@@ -33,11 +33,12 @@ Platform state, as found
 
 Verified against the live servers, not assumed:
 
-- yongnay (DirectAdmin 1.711): ``letsencrypt=1`` and ``ssl=1`` are set, but the
-  server reports ``acmeEnabled: false`` from its own dry-run endpoint. Its ACME
-  support is licence-gated, and no ``license=`` is configured. The API call and
-  the code around it are correct; the server declines to issue. That is reported
-  as a clear reason rather than a failure.
+- yongnay (DirectAdmin 1.711): works, with no licence. I first read
+  ``acmeEnabled: false`` as a licence gate and was wrong. It is a per-domain
+  setting -- ``acme_enabled`` in the domain's own .conf, settable through
+  ``PUT /api/domain-tls/{domain}/acme-config``. Domains with it on hold live
+  Let's Encrypt certificates, with rotated ACME logs showing renewals. The code
+  now enables the domain before asking for a certificate.
 
 - thimpchu (cPanel 138.0): the AutoSSL plugin is not installed and no
   Let's Encrypt provider RPM is present, so there is nothing to call. Until
@@ -80,9 +81,10 @@ ssl_failed_codes = (DA_UNAUTHORIZED,)
 
 _REASONS = {
     DA_ACME_DISABLED: (
-        "DirectAdmin reports Let's Encrypt is switched off for this domain. Its "
-        "ACME support is licence-gated and no DirectAdmin licence is configured "
-        "on this server."
+        "DirectAdmin reports Let's Encrypt is switched off for this domain. "
+        "This is a per-domain setting in DirectAdmin, not a server-wide or "
+        "licence problem: the server has letsencrypt=1 and domains that have it "
+        "enabled receive certificates without any licence configured."
     ),
     DA_LICENSE_OVERUSED: (
         "The DirectAdmin licence is overused, so certificate provisioning is "
@@ -151,6 +153,90 @@ def _da_reason(detail: Any) -> Optional[str]:
     return None
 
 
+# The hostnames DirectAdmin offers in a certificate. It includes a standard set
+# of subdomains whether or not they exist, and every one of them has to pass
+# validation -- so ftp.dash.bt, which resolves nowhere, fails the whole order.
+# This matches the skip list samchar.bt already carries on this server.
+ACME_CANDIDATE_NAMES = ("www", "mail", "ftp", "pop", "smtp", "webmail", "autodiscover")
+
+# The fields DirectAdmin's acme-config requires in full. A partial PUT is
+# refused with "unknown acme key type", so this has to be sent whole.
+_ACME_DEFAULTS = {
+    "provider": "letsencrypt",
+    "externalAccountKeyID": "",
+    "externalAccountHMAC": "",
+    "keyType": "ec256",
+    "preferWildcard": True,
+    "dnsProvider": "",
+    "dnsEnvironment": {},
+    "skipDNSNames": [],
+}
+
+
+def unresolved_names(domain: str) -> List[str]:
+    """
+    Which of the names DirectAdmin would ask for do not actually resolve.
+
+    Returned as a skip list so they are left out of the order. A name that
+    resolves nowhere fails validation, and one failed name fails the whole
+    certificate rather than just its own part -- so a customer with a perfectly
+    good domain and no ftp subdomain could get no certificate at all.
+    """
+    from dns_check import resolve_ips
+
+    missing: List[str] = []
+    for sub in ACME_CANDIDATE_NAMES:
+        name = f"{sub}.{domain}"
+        try:
+            if not resolve_ips(name):
+                missing.append(name)
+        except Exception:  # noqa: BLE001 - a lookup failure counts as unresolved
+            missing.append(name)
+    return missing
+
+
+def enable_da_acme(domain: str, username: str) -> Optional[str]:
+    """
+    Turn Let's Encrypt on for one DirectAdmin domain, if it is not already.
+
+    This is a per-domain switch in DirectAdmin, not a server-wide one, and a
+    domain created by the provisioning flow will not have it. It is read first
+    so a domain that is already enabled is never written to.
+
+    Returns an error message, or None when the domain is enabled.
+    """
+    base = api_base_url(settings.DIRECTADMIN.host,
+                        settings.DIRECTADMIN.tls_hostname, 2222)
+    who = (f"{settings.DIRECTADMIN.api_user}|{username}" if username
+           else settings.DIRECTADMIN.api_user)
+    auth = (who, settings.DIRECTADMIN.api_password)
+    url = f"{base}/api/domain-tls/{domain}/acme-config"
+
+    try:
+        current = requests.get(url, auth=auth, verify=resolve_verify(), timeout=45)
+        if current.status_code == 200 and current.json().get("enabled"):
+            return None
+        # Preserve whatever the domain already had, and only change `enabled`
+        # and the skip list. An operator who has deliberately added names there
+        # keeps them.
+        existing = current.json() if current.status_code == 200 else {}
+        wanted = unresolved_names(domain)
+        skip = list(existing.get("skipDNSNames") or [])
+        for name in wanted:
+            if name not in skip:
+                skip.append(name)
+        body = {**_ACME_DEFAULTS, **existing, "enabled": True, "skipDNSNames": skip}
+        resp = requests.put(url, auth=auth, json=body, verify=resolve_verify(),
+                            timeout=45)
+    except Exception as e:  # noqa: BLE001
+        return f"Could not reach DirectAdmin to enable Let's Encrypt: {e}"
+
+    if resp.status_code in (200, 204):
+        return None
+    return (f"DirectAdmin refused to enable Let's Encrypt for {domain} "
+            f"(HTTP {resp.status_code}): {(resp.text or '')[:160]}")
+
+
 def enable_directadmin(domain: str, username: str = "") -> Dict[str, Any]:
     """
     Ask DirectAdmin to issue a Let's Encrypt certificate for a domain.
@@ -164,6 +250,14 @@ def enable_directadmin(domain: str, username: str = "") -> Dict[str, Any]:
     this path is only reached once the DNS check has established that the domain
     already resolves to this server.
     """
+    # Enabled first: a domain the provisioning flow just created will not have
+    # Let's Encrypt turned on, and the panel answers DOMAIN_ACME_IS_DISABLED
+    # rather than issuing. Read before writing, so a domain that already has it
+    # is left alone.
+    acme_error = enable_da_acme(domain, username)
+    if acme_error:
+        return _result("ssl", FAILED, acme_error)
+
     base = api_base_url(settings.DIRECTADMIN.host, settings.DIRECTADMIN.tls_hostname, 2222)
     # admin|user, DirectAdmin's documented impersonation form, so the request acts
     # on the account that owns the domain rather than on the admin.
@@ -171,7 +265,8 @@ def enable_directadmin(domain: str, username: str = "") -> Dict[str, Any]:
     try:
         resp = requests.post(f"{base}/api/domain-tls/{domain}/provision-certs",
                              auth=(who, settings.DIRECTADMIN.api_password),
-                             verify=resolve_verify(), timeout=120)
+                             verify=resolve_verify(),
+                             timeout=settings.SSL_PROVISION_TIMEOUT_SECONDS)
     except Exception as e:  # noqa: BLE001 - reported, never raised into provisioning
         return _result("ssl", FAILED, f"Could not reach DirectAdmin: {e}")
 
@@ -189,8 +284,8 @@ def enable_directadmin(domain: str, username: str = "") -> Dict[str, Any]:
         if body.get("acmeEnabled") is False:
             return _result("ssl", UNSUPPORTED,
                            "DirectAdmin reports Let's Encrypt is switched off for "
-                           "this domain. Its ACME support is licence-gated and no "
-                           "DirectAdmin licence is configured on this server.",
+                           "this domain. This is a per-domain setting in the panel "
+                           "and can be turned on for it.",
                            acme_enabled=False)
         fulfilled = body.get("certsFulfilled") or []
         failed = list(body.get("dnsNamesFailedChallenge") or [])

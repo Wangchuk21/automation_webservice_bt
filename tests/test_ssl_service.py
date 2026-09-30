@@ -13,7 +13,7 @@ carefully as the issuance path.
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import ssl_service
 from config import settings
@@ -116,7 +116,14 @@ class TestDirectAdminOutcomes(unittest.TestCase):
     """
 
     def _run(self, status_code, body):
+        # enable_directadmin reads the per-domain acme config before issuing, so
+        # the GET is mocked as "already enabled" and the PUT is never reached.
+        # This keeps the test about the provision response it was written for.
+        acme = Mock(status_code=200)
+        acme.json.return_value = {"enabled": True}
         with patch("ssl_service.settings.DIRECTADMIN") as cfg, \
+             patch("dns_check.resolve_ips", return_value=["203.0.113.5"]), \
+             patch("ssl_service.requests.get", return_value=acme), \
              patch("ssl_service.requests.post") as post:
             cfg.host = "203.0.113.1"
             cfg.tls_hostname = ""
@@ -134,11 +141,13 @@ class TestDirectAdminOutcomes(unittest.TestCase):
         self.assertIn("renews it automatically", out["message"])
 
     def test_acme_being_off_is_reported_as_the_servers_own_word(self):
-        """Found live: yongnay answers acmeEnabled:false. Believed over any
-        assumption, and not dressed up as a failure."""
+        """Found live: yongnay answers acmeEnabled:false for a domain with the
+        per-domain switch off. Believed over any assumption, and not dressed up
+        as a failure -- but not blamed on a licence, because that was wrong."""
         out = self._run(200, {"acmeEnabled": False, "certsFulfilled": []})
         self.assertEqual(out["status"], ssl_service.UNSUPPORTED)
-        self.assertIn("licence", out["message"].lower())
+        self.assertIn("per-domain", out["message"])
+        self.assertNotIn("licence", out["message"].lower())
 
     def test_a_failed_challenge_is_a_failure_naming_the_name(self):
         out = self._run(200, {"acmeEnabled": True, "certsFulfilled": [],
@@ -166,7 +175,11 @@ class TestDirectAdminOutcomes(unittest.TestCase):
         self.assertIn("licence", out["message"].lower())
 
     def test_a_non_json_body_does_not_crash_provisioning(self):
+        acme = Mock(status_code=200)
+        acme.json.return_value = {"enabled": True}
         with patch("ssl_service.settings.DIRECTADMIN") as cfg, \
+             patch("dns_check.resolve_ips", return_value=["203.0.113.5"]), \
+             patch("ssl_service.requests.get", return_value=acme), \
              patch("ssl_service.requests.post") as post:
             cfg.host, cfg.tls_hostname = "203.0.113.1", ""
             cfg.api_user, cfg.api_password = "admin", "pw"
@@ -178,7 +191,11 @@ class TestDirectAdminOutcomes(unittest.TestCase):
         self.assertIn("not JSON", out["message"])
 
     def test_a_network_failure_does_not_fail_the_account(self):
+        acme = Mock(status_code=200)
+        acme.json.return_value = {"enabled": True}
         with patch("ssl_service.settings.DIRECTADMIN") as cfg, \
+             patch("dns_check.resolve_ips", return_value=["203.0.113.5"]), \
+             patch("ssl_service.requests.get", return_value=acme), \
              patch("ssl_service.requests.post", side_effect=OSError("refused")):
             cfg.host, cfg.tls_hostname = "203.0.113.1", ""
             cfg.api_user, cfg.api_password = "admin", "pw"
@@ -322,7 +339,11 @@ class TestAnUnauthorisedRequestIsNotBlamedOnThePlatform(unittest.TestCase):
     """
 
     def test_a_401_is_a_failure_not_an_unsupported_platform(self):
+        acme = Mock(status_code=200)
+        acme.json.return_value = {"enabled": True}
         with patch("ssl_service.settings.DIRECTADMIN") as cfg, \
+             patch("dns_check.resolve_ips", return_value=["203.0.113.5"]), \
+             patch("ssl_service.requests.get", return_value=acme), \
              patch("ssl_service.requests.post") as post:
             cfg.host, cfg.tls_hostname = "203.0.113.1", ""
             cfg.api_user, cfg.api_password = "admin", "pw"
@@ -335,7 +356,11 @@ class TestAnUnauthorisedRequestIsNotBlamedOnThePlatform(unittest.TestCase):
     def test_the_rate_limit_stays_unsupported(self):
         """It is a platform condition, and the message must keep saying do not
         retry."""
+        acme = Mock(status_code=200)
+        acme.json.return_value = {"enabled": True}
         with patch("ssl_service.settings.DIRECTADMIN") as cfg, \
+             patch("dns_check.resolve_ips", return_value=["203.0.113.5"]), \
+             patch("ssl_service.requests.get", return_value=acme), \
              patch("ssl_service.requests.post") as post:
             cfg.host, cfg.tls_hostname = "203.0.113.1", ""
             cfg.api_user, cfg.api_password = "admin", "pw"
@@ -343,3 +368,139 @@ class TestAnUnauthorisedRequestIsNotBlamedOnThePlatform(unittest.TestCase):
             post.return_value.json.return_value = {"type": "RATELIMIT_REACHED"}
             out = ssl_service.enable_directadmin("wank.bt", "wank")
         self.assertEqual(out["status"], ssl_service.UNSUPPORTED)
+
+
+class TestLetsEncryptIsEnabledPerDomain(unittest.TestCase):
+    """
+    I first read DirectAdmin's acmeEnabled:false as a licence gate and was wrong.
+    It is a per-domain setting, in the domain's own .conf, settable through
+    PUT /api/domain-tls/{domain}/acme-config -- and domains with it on hold live
+    Let's Encrypt certificates on this server with no licence at all.
+
+    A domain created by the provisioning flow will not have it, and the panel
+    answers DOMAIN_ACME_IS_DISABLED rather than issuing anything.
+    """
+
+    def _da(self, get_status=200, get_body=None, put_status=204):
+        get_resp = Mock(status_code=get_status)
+        get_resp.json.return_value = get_body if get_body is not None else {"enabled": False}
+        put_resp = Mock(status_code=put_status, text="")
+        with patch("ssl_service.settings.DIRECTADMIN") as cfg, \
+             patch("ssl_service.requests.get", return_value=get_resp), \
+             patch("ssl_service.requests.put", return_value=put_resp) as put, \
+             patch("ssl_service.requests.post") as post:
+            cfg.host, cfg.tls_hostname = "203.0.113.1", ""
+            cfg.api_user, cfg.api_password = "admin", "pw"
+            post.return_value.status_code = 200
+            post.return_value.json.return_value = {
+                "acmeEnabled": True, "certsFulfilled": [{"domain": "wank.bt"}]}
+            out = ssl_service.enable_directadmin("wank.bt", "wank")
+        return out, put, post
+
+    def test_a_new_domain_gets_lets_encrypt_turned_on(self):
+        out, put, _ = self._da(get_body={"enabled": False})
+        put.assert_called_once()
+        self.assertEqual(put.call_args.kwargs["json"]["enabled"], True)
+
+    def test_a_domain_that_already_has_it_is_not_written_to(self):
+        """Read first, so enabling is a no-op on the many domains that already
+        work rather than a pointless write on every provisioning."""
+        _, put, _ = self._da(get_body={"enabled": True})
+        put.assert_not_called()
+
+    def test_the_whole_object_is_sent(self):
+        """A partial PUT is refused with 'unknown acme key type'. Found live."""
+        _, put, _ = self._da(get_body={"enabled": False})
+        sent = put.call_args.kwargs["json"]
+        for field in ("keyType", "provider", "preferWildcard", "skipDNSNames"):
+            self.assertIn(field, sent, f"{field} is required in full")
+
+    def test_existing_settings_are_preserved(self):
+        _, put, _ = self._da(get_body={"enabled": False, "keyType": "rsa",
+                                       "preferWildcard": False})
+        sent = put.call_args.kwargs["json"]
+        self.assertEqual(sent["keyType"], "rsa")
+        self.assertFalse(sent["preferWildcard"])
+
+    def test_a_refused_enable_is_a_failure_and_does_not_issue(self):
+        out, _, post = self._da(put_status=403)
+        self.assertEqual(out["status"], ssl_service.FAILED)
+        post.assert_not_called()
+
+    def test_a_domain_off_because_acme_is_disabled_no_longer_blames_a_licence(self):
+        """That diagnosis was wrong, and repeating it would send someone to buy a
+        licence they do not need."""
+        self.assertNotIn("licence-gated", ssl_service._REASONS[ssl_service.DA_ACME_DISABLED])
+        self.assertIn("per-domain", ssl_service._REASONS[ssl_service.DA_ACME_DISABLED])
+
+
+class TestSubdomainsThatDoNotResolve(unittest.TestCase):
+    """
+    Found live. DirectAdmin offers a standard set of subnames in a certificate
+    whether or not they exist, and every one has to validate -- so ftp, pop, smtp
+    and autodiscover, which resolve nowhere, failed the whole order for aaatt.bt.
+    One bad name loses the entire certificate, including the bare domain that
+    would otherwise have been fine.
+
+    This is why samchar.bt already carries a skip list on this server.
+    """
+
+    def test_names_that_resolve_nowhere_are_found(self):
+        with patch("dns_check.resolve_ips", return_value=[]):
+            out = ssl_service.unresolved_names("wank.bt")
+        self.assertIn("ftp.wank.bt", out)
+        self.assertIn("smtp.wank.bt", out)
+
+    def test_a_name_that_resolves_is_not_skipped(self):
+        with patch("dns_check.resolve_ips", return_value=["202.144.128.216"]):
+            self.assertEqual(ssl_service.unresolved_names("wank.bt"), [])
+
+    def test_a_lookup_failure_counts_as_unresolved(self):
+        """A resolver timeout must not be read as "this name is fine"."""
+        with patch("dns_check.resolve_ips", side_effect=OSError("resolver down")):
+            self.assertIn("www.wank.bt", ssl_service.unresolved_names("wank.bt"))
+
+    def test_the_bare_domain_is_never_skipped(self):
+        with patch("dns_check.resolve_ips", return_value=[]):
+            self.assertNotIn("wank.bt", ssl_service.unresolved_names("wank.bt"))
+
+    def test_the_skip_list_reaches_directadmin(self):
+        acme = Mock(status_code=200)
+        acme.json.return_value = {"enabled": False}
+        put_resp = Mock(status_code=204, text="")
+        post = Mock(status_code=200)
+        post.json.return_value = {"acmeEnabled": True, "certsFulfilled": []}
+        with patch("ssl_service.settings.DIRECTADMIN") as cfg, \
+             patch("ssl_service.requests.get", return_value=acme), \
+             patch("ssl_service.requests.put", return_value=put_resp) as put, \
+             patch("ssl_service.requests.post", return_value=post), \
+             patch("dns_check.resolve_ips", return_value=[]):
+            cfg.host, cfg.tls_hostname = "203.0.113.1", ""
+            cfg.api_user, cfg.api_password = "admin", "pw"
+            ssl_service.enable_directadmin("wank.bt", "wank")
+        sent = put.call_args.kwargs["json"]["skipDNSNames"]
+        self.assertIn("ftp.wank.bt", sent)
+
+    def test_an_existing_skip_list_is_kept(self):
+        """An operator who deliberately excluded a name keeps their entry."""
+        acme = Mock(status_code=200)
+        acme.json.return_value = {"enabled": False, "skipDNSNames": ["blog.wank.bt"]}
+        put_resp = Mock(status_code=204, text="")
+        post = Mock(status_code=200)
+        post.json.return_value = {"acmeEnabled": True, "certsFulfilled": []}
+        with patch("ssl_service.settings.DIRECTADMIN") as cfg, \
+             patch("ssl_service.requests.get", return_value=acme), \
+             patch("ssl_service.requests.put", return_value=put_resp) as put, \
+             patch("ssl_service.requests.post", return_value=post), \
+             patch("dns_check.resolve_ips", return_value=["202.144.128.216"]):
+            cfg.host, cfg.tls_hostname = "203.0.113.1", ""
+            cfg.api_user, cfg.api_password = "admin", "pw"
+            ssl_service.enable_directadmin("wank.bt", "wank")
+        self.assertIn("blog.wank.bt", put.call_args.kwargs["json"]["skipDNSNames"])
+
+
+class TestTheTimeoutIsNotTheCause(unittest.TestCase):
+    def test_provisioning_allows_minutes(self):
+        """The first guess of 120s was hit on a domain that already held a
+        certificate, so it was not the hard case."""
+        self.assertGreaterEqual(settings.SSL_PROVISION_TIMEOUT_SECONDS, 300)
