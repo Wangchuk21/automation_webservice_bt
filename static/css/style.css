@@ -1622,3 +1622,23 @@ select.custom-select:focus {
   border-radius: var(--radius-sm);
   background: rgba(251, 191, 36, 0.06);
 }
+
+/* Correcting a forwarding target. Amber, like the correction email: this is
+   fixing a recorded intention, not editing an accomplished fact. */
+.ds-forwarding-editor {
+  margin-top: 16px;
+  padding: 14px;
+  border: 1px solid rgba(251, 191, 36, 0.4);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+}
+.ds-fe-parsed-list {
+  font-family: var(--font-mono);
+  color: #93c5fd;
+}
+/* A single value where a name server list was expected, and a target with
+   enough dots in it to be two hosts pasted together. */
+.ds-fe-parsed-warn {
+  color: #fcd34d;
+  font-weight: 600;
+}

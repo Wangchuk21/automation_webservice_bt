@@ -261,10 +261,34 @@ def resolve_ns(domain: str, lifetime: float = RESOLVE_TIMEOUT) -> List[str]:
         return []
 
 
+def split_target(target: str) -> List[str]:
+    """
+    Pull the individual values out of whatever was pasted into the target field.
+
+    Commas and semicolons separate, and so does whitespace. That last one matters
+    more than it looks: a name server list copied out of a registrar's page or a
+    ticket often arrives space-separated, and splitting on commas alone turned
+    "lina.ns.cloudflare.com sleo.ns.cloudflare.com" into one hostname that could
+    never match anything. The result was a permanent "mismatch" on a forwarding
+    that was in fact correct.
+
+    A trailing dot is dropped. It is valid FQDN notation and DNS would accept it,
+    but comparing "ns1.example.com." against "ns1.example.com" as strings would
+    report a difference that does not exist.
+    """
+    cleaned = (target or "").replace(";", ",").replace("\n", ",")
+    values: List[str] = []
+    for chunk in cleaned.split(","):
+        for piece in chunk.split():
+            value = piece.strip().lower().rstrip(".")
+            if value:
+                values.append(value)
+    return values
+
+
 def _normalise_target(kind: str, target: str) -> List[str]:
     """Comparable forms of what the operator said they pointed the domain at."""
-    values = [v.strip().lower().rstrip(".") for v in (target or "").replace(";", ",").split(",")]
-    values = [v for v in values if v]
+    values = split_target(target)
     if kind == FORWARD_A:
         return sorted({v for v in values if _is_ip(v)})
     return sorted({v for v in values})
@@ -315,10 +339,36 @@ def check_forwarding(domain: str, kind: str, target: str) -> Dict[str, object]:
                              f"forwarding has not been done.")
         return result
 
-    if sorted(observed) == result["expected"] or set(observed) & set(result["expected"]):
+    expected_set, observed_set = set(result["expected"]), set(observed)
+    if observed_set == expected_set:
         result["status"] = FORWARDED
         result["message"] = (f"{domain} is delegated to {', '.join(observed)}, "
                              f"as requested.")
+        return result
+
+    if observed_set & expected_set:
+        # Some of what was asked for is there and some is not. This still counts
+        # as forwarded -- registrars rotate and add nameservers, and blocking here
+        # would leave a correctly working domain nobody could confirm. But it is
+        # not "as requested", and saying so hid the one thing worth knowing: a
+        # name that was entered is not the name that is in place.
+        matched = sorted(observed_set & expected_set)
+        missing = sorted(expected_set - observed_set)
+        extra = sorted(observed_set - expected_set)
+        result["status"] = FORWARDED
+        result["partial"] = True
+        result["missing"] = missing
+        result["extra"] = extra
+        result["message"] = (
+            f"{domain} is delegated to {', '.join(observed)} - it matches on "
+            f"{', '.join(matched)}, but "
+            + (f"{', '.join(missing)} was asked for and is not there"
+               if missing else "nothing else was asked for")
+            + (f", and {', '.join(extra)} is in place that was not asked for"
+               if extra else "")
+            + ". The domain works, but check those are the nameservers you meant "
+              "before telling the customer."
+        )
         return result
 
     result["status"] = MISMATCH

@@ -22,6 +22,8 @@ from fastapi.testclient import TestClient
 import app as app_module
 import dns_check
 from dns_check import (
+    check_forwarding,
+    split_target,
     MAPPED, NOT_MAPPED, UNRESOLVED, check_domain, hosting_addresses, resolve_ips,
 )
 
@@ -414,3 +416,111 @@ class TestThePrecheckRendersSomewhereVisible(unittest.TestCase):
         boxes = [ln for ln in self.html.splitlines() if 'class="res-dns-status' in ln]
         self.assertGreaterEqual(len(boxes), 2,
                                 "expected several boxes to share the renderer")
+
+
+class TestSplittingAPastedTarget(unittest.TestCase):
+    """
+    "lina.ns.cloudflare.com.sleo.ns.cloudflare.com." was registered for
+    goldentakinholidays.bt, so the check compared against one hostname that can
+    never exist and the domain sat on mismatch for ever.
+
+    Commas and semicolons already separated. Whitespace did not, and a name server
+    list copied from a registrar or a ticket very often arrives space-separated.
+    """
+
+    def test_commas_separate(self):
+        self.assertEqual(
+            split_target("lina.ns.cloudflare.com, sleo.ns.cloudflare.com"),
+            ["lina.ns.cloudflare.com", "sleo.ns.cloudflare.com"])
+
+    def test_spaces_separate(self):
+        self.assertEqual(
+            split_target("lina.ns.cloudflare.com sleo.ns.cloudflare.com"),
+            ["lina.ns.cloudflare.com", "sleo.ns.cloudflare.com"])
+
+    def test_semicolons_separate(self):
+        self.assertEqual(
+            split_target("lina.ns.cloudflare.com;sleo.ns.cloudflare.com"),
+            ["lina.ns.cloudflare.com", "sleo.ns.cloudflare.com"])
+
+    def test_a_trailing_dot_does_not_prevent_a_match(self):
+        """Valid FQDN notation, and DNS would accept it, but comparing it as a
+        string against the same name without the dot reports a difference that is
+        not there."""
+        self.assertEqual(split_target("ns1.example.com."),
+                         ["ns1.example.com"])
+
+    def test_extra_separators_do_not_produce_empty_values(self):
+        self.assertEqual(split_target("a.b,  ; c.d,"), ["a.b", "c.d"])
+
+    def test_case_is_normalised(self):
+        self.assertEqual(split_target("NS1.Example.COM"), ["ns1.example.com"])
+
+    def test_a_dot_joined_pair_is_left_alone(self):
+        """
+        Deliberately not split. It is a syntactically valid hostname, and guessing
+        where a name ends and the next begins would invent a target nobody asked
+        for. Caught by showing the operator the parse instead.
+        """
+        self.assertEqual(
+            split_target("lina.ns.cloudflare.com.sleo.ns.cloudflare.com."),
+            ["lina.ns.cloudflare.com.sleo.ns.cloudflare.com"])
+
+
+class TestAPartialMatchIsNotReportedAsRequested(unittest.TestCase):
+    """
+    Found while correcting goldentakinholidays.bt.
+
+    The domain is delegated to alec.ns.cloudflare.com and lina.ns.cloudflare.com.
+    The operator asked for lina and sleo. The old rule accepted any overlap and
+    then said "as requested" -- so a green result sat next to a name that was
+    never in place, and the operator had no way to learn that before telling a
+    customer.
+
+    It still counts as forwarded: registrars rotate and add nameservers, and
+    blocking here would leave a correctly working domain unconfirmable. What it no
+    longer does is claim the request was met.
+    """
+
+    def _check(self, expected):
+        with patch("dns_check.resolve_ns",
+                   return_value=["alec.ns.cloudflare.com", "lina.ns.cloudflare.com"]):
+            return check_forwarding("x.bt", "nameserver", expected)
+
+    def test_it_still_counts_as_forwarded(self):
+        self.assertEqual(self._check("lina.ns.cloudflare.com").get("status"), "forwarded")
+
+    def test_it_does_not_claim_it_was_as_requested(self):
+        msg = self._check("lina.ns.cloudflare.com, sleo.ns.cloudflare.com")["message"]
+        self.assertNotIn("as requested", msg)
+
+    def test_it_names_the_name_that_is_not_there(self):
+        r = self._check("lina.ns.cloudflare.com, sleo.ns.cloudflare.com")
+        self.assertTrue(r.get("partial"))
+        self.assertEqual(r["missing"], ["sleo.ns.cloudflare.com"])
+        self.assertIn("sleo.ns.cloudflare.com", r["message"])
+
+    def test_it_names_what_is_in_place_instead(self):
+        r = self._check("lina.ns.cloudflare.com, sleo.ns.cloudflare.com")
+        self.assertEqual(r["extra"], ["alec.ns.cloudflare.com"])
+        self.assertIn("alec.ns.cloudflare.com", r["message"])
+
+    def test_an_exact_match_still_says_as_requested(self):
+        r = self._check("alec.ns.cloudflare.com, lina.ns.cloudflare.com")
+        self.assertIn("as requested", r["message"])
+        self.assertFalse(r.get("partial"))
+        self.assertIsNone(r.get("missing"))
+
+    def test_a_complete_non_overlap_is_still_a_mismatch(self):
+        with patch("dns_check.resolve_ns",
+                   return_value=["alec.ns.cloudflare.com", "lina.ns.cloudflare.com"]):
+            r = check_forwarding("x.bt", "nameserver", "ns1.elsewhere.com")
+        self.assertEqual(r["status"], "mismatch")
+        self.assertFalse(r.get("partial"))
+
+    def test_the_row_distinguishes_a_partial_match(self):
+        """A green forwarded next to a name that was never in place is the same
+        overstatement in the dashboard."""
+        root = Path(__file__).resolve().parent.parent
+        js = (root / "static" / "js" / "app.js").read_text()
+        self.assertIn("r.last_check_partial", js_function(js, "loadDomainServiceQueue"))

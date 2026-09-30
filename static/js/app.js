@@ -1443,6 +1443,14 @@ function initDomainServices() {
   document.getElementById("ds-email-send")
     .addEventListener("click", () => (correctingDomain ? sendCorrection()
                                                         : sendEditedEmail()));
+  document.getElementById("ds-fe-save")
+    .addEventListener("click", saveForwardingCorrection);
+  document.getElementById("ds-fe-cancel")
+    .addEventListener("click", closeForwardingEditor);
+  document.getElementById("ds-fe-target")
+    .addEventListener("input", describeParsedTarget);
+  document.getElementById("ds-fe-kind")
+    .addEventListener("change", describeParsedTarget);
   document.getElementById("ds-email-cancel")
     .addEventListener("click", closeEmailEditor);
   document.getElementById("ds-email-reset").addEventListener("click", () => {
@@ -1559,10 +1567,16 @@ async function loadDomainServiceQueue() {
       <td>${esc(r.forwarding_kind === "nameserver" ? "name servers" : "A record")}</td>
       <td><code>${esc(r.forwarding_target || "-")}</code></td>
       <td>${r.last_check_status
-            ? `<span class="pill ${r.last_check_status === "forwarded" ? "pill-done" : "pill-pending"}">${esc(r.last_check_status)}</span>`
+            ? (r.last_check_partial
+                ? `<span class="pill pill-pending">partial</span>
+                   <span class="form-hint">${esc((r.last_check_missing || []).join(", "))} not found</span>`
+                : `<span class="pill ${r.last_check_status === "forwarded" ? "pill-done" : "pill-pending"}">${esc(r.last_check_status)}</span>`)
             : '<span class="pill pill-pending">not checked</span>'}</td>
       <td>${actionable
             ? `<button class="btn btn-secondary btn-sm" onclick="verifyDomain('${esc(r.domain)}')">Check</button>
+               ${r.service === "forwarding"
+                 ? ` <button class="btn btn-ghost btn-sm" onclick="openForwardingEditor('${esc(r.domain)}')">Correct nameserver</button>`
+                 : ""}
                ${r.service === "forwarding"
                  ? ` <button class="btn btn-primary btn-sm" onclick="notifyDomain(this, '${esc(r.domain)}')">Send confirmation</button>`
                  : ""}`
@@ -2024,6 +2038,127 @@ async function sendCorrection() {
     }
     await loadDomainServiceQueue();
     await loadActivity();
+  } catch (e) {
+    showToast(e.message, "error");
+  }
+}
+
+// ========================================================
+// CORRECTING WHAT A FORWARDING WAS SUPPOSED TO BE
+//
+// The nameserver or address the check compares against. A pasted list is easy to
+// get wrong: two Cloudflare hosts joined by a dot instead of a comma read as one
+// hostname that can never match, so the domain sat on "mismatch" for ever with no
+// way to say the target was the problem and not the forwarding.
+//
+// Only the requested forwarding is editable, and only before the customer has
+// been emailed. What DNS actually returned is never editable: that is evidence
+// about the public internet, and rewriting it to match what somebody hoped for is
+// the one thing this page exists to prevent.
+//
+// The parse is shown as it is typed. The failure mode was invisible precisely
+// because the field accepted the mangled value without complaint and only said
+// "mismatch" much later.
+let forwardingEditDomain = null;
+
+function splitTargetClientSide(target) {
+  return (target || "")
+    .replace(/;/g, ",")
+    .split(",")
+    .flatMap((chunk) => chunk.split(/\s+/))
+    .map((v) => v.trim().toLowerCase().replace(/\.$/, ""))
+    .filter(Boolean);
+}
+
+function describeParsedTarget() {
+  const kind = document.getElementById("ds-fe-kind").value;
+  const raw = document.getElementById("ds-fe-target").value;
+  const out = document.getElementById("ds-fe-parsed");
+  if (!out) return;
+  const values = splitTargetClientSide(raw);
+  if (!values.length) { out.textContent = ""; return; }
+
+  const noun = kind === "nameserver" ? "name server" : "address";
+  const shown = values.map((v) => esc(v)).join(", ");
+
+  // A single value for a nameserver forwarding, with more dots than a host name
+  // normally has, is almost always two hosts pasted together with a dot.
+  const suspicious = kind === "nameserver" && values.length === 1
+    && values[0].split(".").length > 4;
+  if (suspicious) {
+    out.className = "form-hint ds-fe-parsed-warn";
+    out.innerHTML = `Read as one ${noun}: <span class="ds-fe-parsed-list">${shown}</span>`
+      + ` &mdash; that looks like two values pasted together. Separate them with a `
+      + `comma or a space.`;
+    return;
+  }
+  out.className = "form-hint";
+  out.innerHTML = `Will be checked as ${values.length} ${noun}${values.length > 1 ? "s" : ""}: `
+    + `<span class="ds-fe-parsed-list">${shown}</span>`;
+}
+
+async function openForwardingEditor(domain) {
+  const box = document.getElementById("ds-forwarding-editor");
+  if (!box) return;
+  let state;
+  try {
+    const res = await fetch(`/api/v1/domain-services/${encodeURIComponent(domain)}`,
+                           { headers: apiHeaders() });
+    state = await res.json();
+    if (!res.ok) {
+      showToast((state && state.detail) || `HTTP ${res.status}`, "error");
+      return;
+    }
+  } catch (e) { showToast(e.message, "error"); return; }
+
+  forwardingEditDomain = domain;
+  document.getElementById("ds-fe-domain").textContent = domain;
+  document.getElementById("ds-fe-kind").value = state.forwarding_kind || "nameserver";
+  document.getElementById("ds-fe-target").value = state.forwarding_target || "";
+  describeParsedTarget();
+  box.hidden = false;
+  box.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  document.getElementById("ds-fe-target").focus();
+}
+
+function closeForwardingEditor() {
+  const box = document.getElementById("ds-forwarding-editor");
+  if (box) box.hidden = true;
+  forwardingEditDomain = null;
+}
+
+async function saveForwardingCorrection() {
+  if (!forwardingEditDomain) return;
+  const domain = forwardingEditDomain;
+  const kind = document.getElementById("ds-fe-kind").value;
+  const target = document.getElementById("ds-fe-target").value.trim();
+  if (!target) { showToast("Enter what the domain should be pointed at", "error"); return; }
+  if (!splitTargetClientSide(target).length) {
+    showToast("That value could not be read as a nameserver or address", "error");
+    return;
+  }
+  try {
+    const res = await fetch(
+      `/api/v1/domain-services/${encodeURIComponent(domain)}/forwarding`,
+      {
+        method: "PATCH",
+        headers: apiHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ kind, target }),
+      });
+    const data = await res.json();
+    if (!res.ok) {
+      // 409 here is a rule, not a failure: already emailed, or hosted, or the
+      // domain is not recorded. All worth saying out loud.
+      showToast((data && data.detail) || `HTTP ${res.status}`, "error");
+      return;
+    }
+    showToast(data.message || "Forwarding updated", "success");
+    closeForwardingEditor();
+    await loadDomainServiceQueue();
+    await loadActivity();
+    // Check straight away: the point of correcting the target is to find out
+    // whether the forwarding was right all along.
+    await verifyDomain(domain);
   } catch (e) {
     showToast(e.message, "error");
   }

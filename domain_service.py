@@ -181,6 +181,11 @@ def record_verification(domain: str, result: Dict[str, Any]) -> Dict[str, Any]:
         "observed": result.get("observed", []),
         "last_check_status": result.get("status", ""),
         "last_check_message": result.get("message", ""),
+        # Some of what was asked for was found and some was not. Kept so the row
+        # can say so: a green "forwarded" against a partial match is the same
+        # overstatement in the dashboard that the check message used to make.
+        "last_check_partial": bool(result.get("partial")),
+        "last_check_missing": result.get("missing", []),
         "last_checked_at": _now(),
         "status": status,
         "updated_at": _now(),
@@ -244,3 +249,62 @@ def record_notification(domain: str, sent: bool, message: str,
 def list_by_status(*statuses: str) -> List[Dict[str, Any]]:
     wanted = set(statuses)
     return [e for e in current_states() if e.get("status") in wanted]
+
+
+def update_forwarding(domain: str, kind: str, target: str) -> Dict[str, Any]:
+    """
+    Correct what a forwarding was supposed to be.
+
+    Only the requested forwarding, and only before anyone has been told about it.
+
+    `forwarding_target` is a record of what was asked for -- an intention, set by
+    hand before the forwarding exists. Correcting a typo in it is honest. What is
+    deliberately NOT editable is `observed`, which is what DNS actually returned:
+    changing that would be rewriting evidence about the state of the public
+    internet to match what somebody hoped it was, and the whole reason this page
+    checks rather than trusts is that the two can differ.
+
+    Once the customer has been emailed, the record describes a claim that was made
+    to them, so it stops being editable. That case belongs to the correction flow,
+    which sends a second email rather than quietly rewriting the first.
+    """
+    domain = normalise_domain(domain)
+    previous = get_state(domain)
+    if previous is None:
+        raise ValueError(f"No domain service is recorded for '{domain}'.")
+    if previous.get("service") != FORWARDING:
+        raise ValueError(
+            f"'{domain}' is recorded as {previous.get('service')}, which has no "
+            f"forwarding to correct. Its hosting account is managed by the "
+            f"provisioning form.")
+    if previous.get("status") == NOTIFIED:
+        raise ValueError(
+            f"'{domain}' was already emailed to the customer on "
+            f"{previous.get('notified_at')}, so the record of what they were told "
+            f"is fixed. Send a correction instead.")
+
+    kind = (kind or "").strip().lower()
+    if kind not in ("a", "nameserver"):
+        raise ValueError(f"'{kind}' is not a forwarding kind. Use 'a' or 'nameserver'.")
+
+    target = (target or "").strip()
+    if not target:
+        raise ValueError("Enter what the domain should be pointed at.")
+
+    entry = {
+        **previous,
+        "forwarding_kind": kind,
+        "forwarding_target": target,
+        # A check result describes the old target, so it is cleared rather than
+        # left to be read as if it had been run against the new one. The
+        # forwarding itself has not changed, so this is not a retraction.
+        "last_check_status": "",
+        "last_check_message": "",
+        "observed": [],
+        "target_edited_at": _now(),
+        "previous_target": previous.get("forwarding_target", ""),
+        "previous_kind": previous.get("forwarding_kind", ""),
+        "updated_at": _now(),
+    }
+    append(entry)
+    return entry

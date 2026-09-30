@@ -502,6 +502,43 @@
       </p>
       <div id="ds-queue">Loading&hellip;</div>
 
+      <!-- Correcting what a forwarding was supposed to be. A pasted name server
+           list is easy to get wrong, and without this the only way out was to
+           surrender the registration and start again. -->
+      <div id="ds-forwarding-editor" class="ds-forwarding-editor" hidden>
+        <h4 class="docs-box-title">Correct the forwarding for
+          <span id="ds-fe-domain" class="ds-sent-to"></span></h4>
+        <p class="form-hint">
+          This is what the check compares against. It does not change the domain
+          itself &mdash; the forwarding is still done by hand.
+        </p>
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label" for="ds-fe-kind">Forwarded by</label>
+            <div class="input-wrapper">
+              <select id="ds-fe-kind">
+                <option value="a">A record &mdash; to an IP address</option>
+                <option value="nameserver">Name servers &mdash; delegate elsewhere</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="ds-fe-target">Pointed at</label>
+            <div class="input-wrapper">
+              <input type="text" id="ds-fe-target" autocomplete="off"
+                     placeholder="e.g. lina.ns.cloudflare.com, sleo.ns.cloudflare.com">
+            </div>
+            <span class="form-hint" id="ds-fe-parsed"></span>
+          </div>
+        </div>
+        <div class="ds-email-actions">
+          <button type="button" class="btn btn-primary btn-sm" id="ds-fe-save">
+            Save and check
+          </button>
+          <button type="button" class="btn btn-ghost btn-sm" id="ds-fe-cancel">Cancel</button>
+        </div>
+      </div>
+
       <!-- The email, before it is sent. Shown so the wording can be read, and
            changed, before it reaches a customer. Defaults to the format BT
            already uses, with the check output in it. -->

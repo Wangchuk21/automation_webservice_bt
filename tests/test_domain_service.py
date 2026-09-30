@@ -1286,3 +1286,140 @@ class TestTheCorrectionIsOfferedInTheRightPlace(unittest.TestCase):
         words "disregard the earlier message" do not appear in it, and if they
         ever did, cutting at the first one would silently drop real content."""
         self.assertIn("function stripCorrectionIntro", self.js)
+
+
+class TestCorrectingTheForwardingTarget(unittest.TestCase):
+    """
+    Registered goldentakinholidays.bt pointed at
+    "lina.ns.cloudflare.com.sleo.ns.cloudflare.com." -- two Cloudflare hosts
+    pasted together with a dot instead of a comma. The check compared against one
+    hostname that cannot exist, so the row read "mismatch" and the only way out
+    was to surrender the registration and start again.
+
+    This is the distinction that makes the feature safe: the target is a record
+    of what was *asked for*, so correcting a typo in it is honest. What DNS
+    actually returned is evidence, and rewriting that to match what somebody hoped
+    for is the one thing this page exists to prevent.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.path = Path(self.tmp.name) / "services.jsonl"
+        p = patch.object(domain_service, "log_path", return_value=self.path)
+        p.start(); self.addCleanup(p.stop)
+        domain_service.record_registration(
+            domain="goldentakinholidays.bt", customer_name="Ashika Rai",
+            email="a@x.bt", service="forwarding", forwarding_kind="nameserver",
+            forwarding_target="lina.ns.cloudflare.com.sleo.ns.cloudflare.com.",
+            registry_action="created")
+
+    def test_the_target_can_be_corrected(self):
+        e = domain_service.update_forwarding(
+            "goldentakinholidays.bt", "nameserver",
+            "lina.ns.cloudflare.com, sleo.ns.cloudflare.com")
+        self.assertEqual(e["forwarding_target"],
+                         "lina.ns.cloudflare.com, sleo.ns.cloudflare.com")
+
+    def test_the_kind_can_be_corrected(self):
+        e = domain_service.update_forwarding("goldentakinholidays.bt", "a", "198.51.100.9")
+        self.assertEqual(e["forwarding_kind"], "a")
+
+    def test_the_old_value_is_kept(self):
+        """So it is visible that a correction happened, and what it was."""
+        e = domain_service.update_forwarding("goldentakinholidays.bt", "nameserver",
+                                             "ns1.correct.bt, ns2.correct.bt")
+        self.assertEqual(e["previous_target"],
+                         "lina.ns.cloudflare.com.sleo.ns.cloudflare.com.")
+        self.assertTrue(e["target_edited_at"])
+
+    def test_the_stale_check_result_is_cleared(self):
+        """It described the old target. Left in place it would be read as though
+        it had been run against the new one."""
+        domain_service.get_state("goldentakinholidays.bt")
+        e = domain_service.update_forwarding("goldentakinholidays.bt", "nameserver",
+                                             "ns1.correct.bt")
+        self.assertEqual(e["last_check_status"], "")
+        self.assertEqual(e["observed"], [])
+
+    def test_observed_is_never_editable(self):
+        """There is no parameter through which to set it. What DNS returned is
+        evidence about the public internet."""
+        import inspect
+        params = list(inspect.signature(domain_service.update_forwarding).parameters)
+        self.assertEqual(params, ["domain", "kind", "target"])
+
+    def test_it_refuses_once_the_customer_has_been_emailed(self):
+        """The record then describes a claim that was made to them, so it stops
+        being editable. That case belongs to the correction flow."""
+        domain_service.record_notification(
+            "goldentakinholidays.bt", True, "Sent", subject="s", body="b",
+            recipient="a@x.bt", kind="nameserver")
+        with self.assertRaises(ValueError) as cm:
+            domain_service.update_forwarding("goldentakinholidays.bt", "nameserver",
+                                             "ns1.other.bt")
+        self.assertIn("correction", str(cm.exception).lower())
+
+    def test_it_refuses_for_a_hosted_domain(self):
+        domain_service.record_registration(
+            domain="hosted.bt", customer_name="H", email="a@x.bt",
+            service="hosting", registry_action="created")
+        with self.assertRaises(ValueError) as cm:
+            domain_service.update_forwarding("hosted.bt", "a", "198.51.100.9")
+        self.assertIn("no", str(cm.exception).lower())
+
+    def test_it_refuses_an_empty_target(self):
+        with self.assertRaises(ValueError):
+            domain_service.update_forwarding("goldentakinholidays.bt", "nameserver", "  ")
+
+    def test_it_refuses_an_unknown_kind(self):
+        with self.assertRaises(ValueError):
+            domain_service.update_forwarding("goldentakinholidays.bt", "mx", "x.bt")
+
+    def test_it_refuses_an_unknown_domain(self):
+        with self.assertRaises(ValueError):
+            domain_service.update_forwarding("never-seen.bt", "a", "198.51.100.9")
+
+    def test_the_registration_is_not_lost(self):
+        """The reason this exists: the alternative was surrendering the domain on
+        nic.bt.bt and registering it again."""
+        e = domain_service.update_forwarding("goldentakinholidays.bt", "nameserver",
+                                             "ns1.correct.bt")
+        self.assertEqual(e["customer_name"], "Ashika Rai")
+        self.assertEqual(e["service"], "forwarding")
+        self.assertTrue(e["created_at"])
+
+
+class TestTheForwardingEditor(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        root = Path(__file__).resolve().parent.parent
+        cls.js = (root / "static" / "js" / "app.js").read_text()
+        cls.html = (root / "templates" / "index.html").read_text()
+
+    def test_a_row_offers_the_correction(self):
+        self.assertIn("Correct nameserver", self.js)
+
+    def test_the_parse_is_shown_as_it_is_typed(self):
+        """The failure was invisible because the field took the mangled value
+        without complaint and only said "mismatch" much later."""
+        self.assertIn("describeParsedTarget", self.js)
+        self.assertIn("Will be checked as", self.js)
+
+    def test_a_dot_joined_pair_is_called_out(self):
+        self.assertIn("ds-fe-parsed-warn", self.js)
+        self.assertIn("pasted together", self.js)
+
+    def test_saving_checks_straight_away(self):
+        """The point of correcting the target is to find out whether the
+        forwarding was right all along."""
+        body = js_function(self.js, "saveForwardingCorrection")
+        self.assertIn("verifyDomain(", body)
+
+    def test_a_hosted_domain_gets_no_correction_button(self):
+        self.assertIn('r.service === "forwarding"', js_function(self.js, "loadDomainServiceQueue"))
+
+    def test_the_editor_exists(self):
+        for el in ('id="ds-forwarding-editor"', 'id="ds-fe-kind"',
+                   'id="ds-fe-target"', 'id="ds-fe-parsed"'):
+            self.assertTrue(el in self.html, f"{el} is missing")

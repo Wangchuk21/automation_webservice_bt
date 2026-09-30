@@ -1461,6 +1461,42 @@ def correct_domain_notification(payload: DomainCorrectRequest):
             "corrects": first.get("at", "")}
 
 
+class DomainForwardingUpdate(BaseModel):
+    kind: str
+    target: str
+
+
+@app.patch("/api/v1/domain-services/{domain}/forwarding",
+           dependencies=[Depends(require_api_token)])
+def update_domain_forwarding(domain: str, payload: DomainForwardingUpdate):
+    """
+    Correct the nameserver or address a forwarding was supposed to use.
+
+    A pasted name server list is easy to get wrong -- two hosts joined by a
+    dot instead of a comma reads as one hostname that can never match, and the
+    domain then sits on "mismatch" forever with no way to say so. This is the
+    way to fix it without surrendering the registration and starting again.
+
+    The parsed result is returned alongside, so the operator can see what was
+    actually understood rather than finding out from the next check.
+    """
+    try:
+        entry = domain_service.update_forwarding(domain, payload.kind, payload.target)
+    except ValueError as e:
+        # A rule, not a crash: an already-notified domain, a hosted one, or an
+        # unusable target. All are things the operator needs to be told plainly.
+        raise HTTPException(status_code=409, detail=str(e))
+
+    from dns_check import split_target
+    return {
+        "service": entry,
+        "will_check_as": split_target(entry.get("forwarding_target", "")),
+        "message": f"The forwarding for {entry['domain']} is now checked against "
+                   f"{', '.join(split_target(entry.get('forwarding_target', '')))}. "
+                   f"Press Check to confirm it.",
+    }
+
+
 @app.get("/api/v1/domain-services/{domain}", dependencies=[Depends(require_api_token)])
 def get_domain_service(domain: str):
     """
