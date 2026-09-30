@@ -1,3 +1,4 @@
+import re
 import smtplib
 import ssl
 from email.mime.multipart import MIMEMultipart
@@ -246,3 +247,90 @@ def send_forwarding_confirmation(
     except Exception as e:
         logger.error("Failed to send the forwarding confirmation for %s: %s", domain, e)
         return False, f"Failed to send email: {e}"
+
+
+def correction_subject(domain: str) -> str:
+    return f"Correction to our earlier email - your domain {domain}"
+
+
+def correction_intro(domain: str, reason: str) -> str:
+    """
+    Open by saying what this email is, before the operator's wording.
+
+    A customer who receives two emails about the same domain has no way to tell
+    which one to believe unless the second says so. "Sorry for the confusion"
+    without saying what is being corrected just adds a second thing to
+    understand. The reason is required, so this is never empty.
+    """
+    return (f"Dear Customer,\n\n"
+            f"We are writing again about your domain {domain} to correct an "
+            f"earlier email. {reason.strip()}\n\n"
+            f"The information below replaces what we sent before. Please disregard "
+            f"the earlier message.\n\n")
+
+
+def send_forwarding_correction(
+    domain: str,
+    email: str,
+    kind: str,
+    target: str,
+    observed=None,
+    subject: Optional[str] = None,
+    body: Optional[str] = None,
+    reason: str = "",
+) -> Tuple[bool, str]:
+    """
+    A second email about a domain the customer has already been told about.
+
+    Sent only when the operator says what was wrong, and the corrected text
+    follows. It does not supersede the earlier email -- nothing can. Both are
+    kept in the record, because the customer holds both.
+    """
+    if not domain:
+        return False, "No domain given."
+    if not email:
+        return False, "No recipient given."
+    if not (reason or "").strip():
+        return False, "A correction needs a reason."
+
+    if not settings.SMTP_ENABLED:
+        return False, "SMTP is not enabled, so no email can be sent."
+
+    text = correction_body(domain, reason, kind, target, observed, body)
+
+    return send_forwarding_confirmation(
+        domain=domain, email=email, kind=kind, target=target, observed=observed,
+        subject=(subject or "").strip() or correction_subject(domain),
+        body=text,
+    )
+
+
+def correction_body(domain: str, reason: str, kind: str, target: str,
+                    observed=None, body: Optional[str] = None) -> str:
+    """
+    A correction always opens by saying it is one.
+
+    The framing is not the operator's to drop. An earlier version replaced it
+    with the operator's own text whenever they supplied any, which meant a
+    corrected email could go out looking exactly like a first one -- the customer
+    would hold two contradictory messages with nothing to say which was current.
+    That is worse than sending nothing, because it looks like the problem is
+    handled.
+
+    So the operator edits the correction itself; the statement that this replaces
+    the earlier email stays.
+    """
+    if (body or "").strip():
+        content = body.strip()
+    else:
+        # The generated text opens with its own salutation, and the intro has
+        # already said "Dear Customer" -- two of them reads as two letters pasted
+        # together.
+        content = re.sub(r"^Dear Customer,\s*", "",
+                         forwarding_text(domain, kind, target, observed)).lstrip()
+    intro = correction_intro(domain, reason)
+    # Tolerate an operator who pasted the whole thing back in, rather than
+    # printing the framing twice in one email.
+    if content.lstrip().lower().startswith(intro.strip()[:40].lower()):
+        return content
+    return intro + content

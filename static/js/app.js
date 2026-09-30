@@ -1441,7 +1441,8 @@ function initDomainServices() {
   document.getElementById("btn-ds-register")
     .addEventListener("click", registerDomainService);
   document.getElementById("ds-email-send")
-    .addEventListener("click", sendEditedEmail);
+    .addEventListener("click", () => (correctingDomain ? sendCorrection()
+                                                        : sendEditedEmail()));
   document.getElementById("ds-email-cancel")
     .addEventListener("click", closeEmailEditor);
   document.getElementById("ds-email-reset").addEventListener("click", () => {
@@ -1567,7 +1568,10 @@ async function loadDomainServiceQueue() {
                  : ""}`
             : (r.notification && r.notification.body
                 ? `<span class="muted">told</span>
-                   <button class="btn btn-ghost btn-sm" onclick="showSentEmailForDomain('${esc(r.domain)}')">View sent email</button>`
+                   <button class="btn btn-ghost btn-sm" onclick="showSentEmailForDomain('${esc(r.domain)}')">View sent email</button>
+                   ${!((r.sends || []).length && r.notification.correction)
+                     ? ` <button class="btn btn-secondary btn-sm" onclick="openCorrectionEditor('${esc(r.domain)}')">Send correction</button>`
+                     : ""}`
                 : '<span class="muted">told</span>')}</td>
     </tr>`;
 
@@ -1710,6 +1714,7 @@ async function openEmailEditor(domain) {
   }
   emailFor = domain;
   emailDefault = { subject: data.subject, body: data.body };
+  hideCorrectionFields();
   // Clear any read-only state left by viewing a past email, or the next domain
   // to be notified gets an uneditable box with the send button still hidden.
   const heading = box.querySelector(".docs-box-title");
@@ -1738,6 +1743,7 @@ function closeEmailEditor() {
   if (box) box.hidden = true;
   emailFor = null;
   emailDefault = null;
+  hideCorrectionFields();
 }
 
 async function sendEditedEmail() {
@@ -1880,5 +1886,145 @@ async function notifyDomain(btn, domain) {
     showToast(e.message, "error");
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = "Send confirmation"; }
+  }
+}
+
+// ========================================================
+// CORRECTING AN EMAIL THAT HAS ALREADY GONE OUT
+//
+// There is no edit button for a sent email, and there cannot be. Nothing recalls
+// a message a customer already has; changing the stored copy would only make the
+// record disagree with their inbox, which is the one thing the record is for.
+//
+// So the only honest route is a second email that says it replaces the first.
+// The notify endpoint refuses that with a 409 on purpose, so this is a separate
+// deliberate act, and it must say what was wrong -- a customer with two emails
+// about the same domain cannot tell which to believe otherwise.
+let correctingDomain = null;
+
+// The server prepends the "this replaces our earlier email" framing to every
+// correction. Take it off what is offered for editing so the operator is not
+// shown -- or sent -- a second copy of it.
+function stripCorrectionIntro(text) {
+  const marker = /please disregard the earlier message\./i;
+  if (!marker.test(text)) return text;
+  const cut = text.search(marker);
+  if (cut < 0) return text;
+  return text.slice(text.indexOf("\n", cut) + 1).replace(/^\s+/, "");
+}
+
+async function openCorrectionEditor(domain) {
+  const box = document.getElementById("ds-email-editor");
+  if (!box) return;
+  let state;
+  try {
+    const res = await fetch(`/api/v1/domain-services/${encodeURIComponent(domain)}`,
+                           { headers: apiHeaders() });
+    state = await res.json();
+    if (!res.ok) {
+      showToast((state && state.detail) || `HTTP ${res.status}`, "error");
+      return;
+    }
+  } catch (e) { showToast(e.message, "error"); return; }
+
+  const last = (state.sends || []).slice(-1)[0];
+  if (!last) { showToast(`No sent email is recorded for ${domain}`, "error"); return; }
+
+  correctingDomain = domain;
+  emailFor = null;  // this is not a fresh notification; it must not reuse that path
+
+  // Start from what was actually sent, so a typo is fixed rather than retyped
+  // and a second mistake introduced. The framing is stripped if it is there: the
+  // server adds it back on every correction, and pasting the whole thing back
+  // would show the customer the opening twice.
+  document.getElementById("ds-email-body").value = stripCorrectionIntro(last.body || "");
+  document.getElementById("ds-email-subject").value = last.subject || "";
+  document.getElementById("ds-correction-reason").value = "";
+  document.getElementById("ds-correction-to").value = last.to || "";
+
+  for (const id of ["ds-correction-fields", "ds-correction-to-group"]) {
+    const el = document.getElementById(id);
+    if (el) el.hidden = false;
+  }
+  for (const el of ["ds-email-subject", "ds-email-body"]) {
+    const input = document.getElementById(el);
+    if (input) input.readOnly = false;
+  }
+  const heading = box.querySelector(".docs-box-title");
+  if (heading) {
+    heading.innerHTML = `✏️ Correcting the email sent to `
+      + `<span class="ds-sent-to">${esc(last.to || "no address recorded")}</span>`
+      + ` <span class="pill pill-pending">already delivered</span>`;
+  }
+  for (const id of ["ds-email-send", "ds-email-reset"]) {
+    const btn = document.getElementById(id);
+    if (btn) btn.hidden = true;
+  }
+  const send = document.getElementById("ds-email-send");
+  if (send) { send.hidden = false; send.textContent = "Send correction"; }
+  const cancel = document.getElementById("ds-email-cancel");
+  if (cancel) cancel.textContent = "Cancel";
+
+  box.hidden = false;
+  box.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  document.getElementById("ds-correction-reason").focus();
+}
+
+function hideCorrectionFields() {
+  correctingDomain = null;
+  for (const id of ["ds-correction-fields", "ds-correction-to-group"]) {
+    const el = document.getElementById(id);
+    if (el) el.hidden = true;
+  }
+  const send = document.getElementById("ds-email-send");
+  if (send) send.textContent = "Send to customer";
+}
+
+async function sendCorrection() {
+  if (!correctingDomain) return;
+  const domain = correctingDomain;
+  const reason = document.getElementById("ds-correction-reason").value.trim();
+  const body = document.getElementById("ds-email-body").value;
+  const to = document.getElementById("ds-correction-to").value.trim();
+
+  if (reason.length < 5) {
+    showToast("Say what was wrong with the first email", "error");
+    return;
+  }
+  if (!body.trim()) { showToast("The message is empty", "error"); return; }
+  if (!to || to.indexOf("@") < 0) {
+    showToast("Enter a valid address for the correction", "error");
+    return;
+  }
+  if (!window.confirm(
+    `Send a correction to ${to} for ${domain}?\\n\\n`
+    + `The first email cannot be recalled. The customer will hold both, and this\\n`
+    + `one will say that it replaces the first.`
+  )) return;
+
+  try {
+    const res = await fetch("/api/v1/domain-services/correct", {
+      method: "POST",
+      headers: apiHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({
+        domain, reason, recipient: to,
+        subject: document.getElementById("ds-email-subject").value || null,
+        body,
+      }),
+    });
+    const data = await res.json();
+    if (res.ok) {
+      showToast(data.message || "Correction sent", "success");
+      hideCorrectionFields();
+      if (data.sent) showSentEmail(domain, data.sent);
+    } else {
+      // 409 here is the server refusing: the domain is no longer forwarded, or a
+      // correction was already sent. Both are things to go and fix.
+      showToast((data && data.detail) || `HTTP ${res.status}`, "error");
+    }
+    await loadDomainServiceQueue();
+    await loadActivity();
+  } catch (e) {
+    showToast(e.message, "error");
   }
 }

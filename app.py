@@ -25,7 +25,7 @@ from provisioners.base import (
     validate_renewal_date,
     ValidationError,
 )
-from notifier import send_customer_welcome_email, test_smtp_connection, send_forwarding_confirmation, forwarding_subject, forwarding_text
+from notifier import send_customer_welcome_email, test_smtp_connection, send_forwarding_confirmation, forwarding_subject, forwarding_text, correction_subject, correction_body, send_forwarding_correction
 from nic_client import (
     NICClient, REGISTRY_FIELDS, build_registry_payload, missing_registry_fields,
     registry_field_spec, split_domain_ext,
@@ -1361,6 +1361,104 @@ class DomainNotifyRequest(BaseModel):
     # The operator's own wording, if they changed it. Empty means the house text.
     subject: Optional[str] = None
     body: Optional[str] = None
+
+
+class DomainCorrectRequest(BaseModel):
+    domain: str
+    # What was wrong with the first email. Required: the customer is receiving a
+    # second message about the same thing, and an unexplained one is worse than
+    # a wrong one.
+    reason: str
+    # The address may be wrong too, not only the wording.
+    recipient: Optional[str] = None
+    subject: Optional[str] = None
+    body: Optional[str] = None
+
+
+@app.post("/api/v1/domain-services/correct",
+          dependencies=[Depends(require_token_for_destructive)])
+def correct_domain_notification(payload: DomainCorrectRequest):
+    """
+    Send a second email about a domain the customer has already been told about.
+
+    The notify endpoint refuses this with a 409, which is right: nobody should
+    be able to double-send by accident. But an email that was genuinely wrong
+    cannot be recalled, and this leaves no other route. So a correction is a
+    separate, deliberate act with its own endpoint, and it must say what was
+    wrong.
+
+    The DNS check is repeated here rather than trusted from the first send. The
+    original was justified by a check that passed then; a second claim that the
+    domain is forwarded is a new claim about the present, and forwarding can
+    lapse. Correcting a typo about an address that has since stopped resolving
+    would be telling the customer something false twice.
+
+    Neither email is deleted or rewritten. The customer holds both, so the
+    record holds both.
+    """
+    try:
+        domain = domain_service.normalise_domain(payload.domain)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+    reason = (payload.reason or "").strip()
+    if len(reason) < 5:
+        raise HTTPException(
+            status_code=422,
+            detail="Say what was wrong with the first email. The customer is "
+                   "getting a second message and needs to know which to trust.")
+
+    state = domain_service.get_state(domain)
+    if state is None:
+        raise HTTPException(status_code=404,
+                            detail=f"No domain service is recorded for '{domain}'.")
+    first = state.get("notification")
+    if not first:
+        raise HTTPException(
+            status_code=409,
+            detail=f"'{domain}' has not been emailed yet, so there is nothing "
+                   f"to correct. Send the confirmation first.")
+    if (state.get("sends") or [])[-1].get("correction"):
+        raise HTTPException(
+            status_code=409,
+            detail=f"The last email for '{domain}' was already a correction "
+                   f"({(state.get('sends') or [])[-1].get('at', '')}). One "
+                   f"correction is the record; send another only if this is a "
+                   f"separate new problem.")
+
+    # Re-check. The original was justified by a check that passed at the time.
+    result = check_forwarding(domain, state.get("forwarding_kind", ""),
+                              state.get("forwarding_target", ""))
+    if result.get("status") != "forwarded":
+        raise HTTPException(
+            status_code=409,
+            detail=(f"Refusing to send a correction: '{domain}' is no longer "
+                    f"forwarded as described ({result.get('message')}). Fix the "
+                    f"forwarding first, then send a correction that says what is "
+                    f"true."))
+
+    recipient = (payload.recipient or "").strip() or state.get("email", "")
+    kind = state.get("forwarding_kind", "")
+    target = state.get("forwarding_target", "")
+    observed = result.get("observed") or state.get("observed", [])
+    final_subject = ((payload.subject or "").strip() or correction_subject(domain))
+    # The framing is added here and cannot be replaced: an operator editing the
+    # correction must not be able to produce an email that reads like a first one.
+    final_body = correction_body(domain, reason, kind, target, observed, payload.body)
+
+    sent, message = send_forwarding_correction(
+        domain=domain, email=recipient, kind=kind, target=target,
+        observed=observed, subject=final_subject, body=final_body, reason=reason)
+
+    entry = domain_service.record_notification(
+        domain, sent, message, subject=final_subject, body=final_body,
+        recipient=recipient, kind=kind, edited=bool((payload.body or "").strip()),
+        correction=True, reason=reason)
+    if not sent:
+        raise HTTPException(status_code=502, detail=message)
+    return {"success": True, "message": message, "service": entry,
+            "sent": entry.get("notification", {}),
+            "corrects": first.get("at", "")}
 
 
 @app.get("/api/v1/domain-services/{domain}", dependencies=[Depends(require_api_token)])

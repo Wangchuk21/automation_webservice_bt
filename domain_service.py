@@ -191,7 +191,8 @@ def record_verification(domain: str, result: Dict[str, Any]) -> Dict[str, Any]:
 
 def record_notification(domain: str, sent: bool, message: str,
                         subject: str = "", body: str = "", recipient: str = "",
-                        kind: str = "", edited: bool = False) -> Dict[str, Any]:
+                        kind: str = "", edited: bool = False,
+                        correction: bool = False, reason: str = "") -> Dict[str, Any]:
     """
     Record that the customer was told -- or that the attempt failed.
 
@@ -213,7 +214,13 @@ def record_notification(domain: str, sent: bool, message: str,
         "updated_at": _now(),
     }
     if sent:
-        entry["notification"] = {
+        # Every send is kept, not just the last. A correction that overwrote the
+        # original would leave the record agreeing with the customer's inbox
+        # about the wrong thing, which is the one outcome the record exists to
+        # prevent. "notification" points at the most recent send so existing
+        # readers keep working.
+        sends = list(previous.get("sends") or [])
+        sends.append({
             "at": entry["notified_at"],
             "to": recipient,
             "subject": subject,
@@ -224,7 +231,12 @@ def record_notification(domain: str, sent: bool, message: str,
             # as edited whenever they were absent or had changed.
             "edited": bool(edited),
             "kind": kind or previous.get("forwarding_kind", ""),
-        }
+            "correction": bool(correction),
+            "correction_of": previous.get("notified_at", "") if correction else "",
+            "reason": (reason or "").strip(),
+        })
+        entry["sends"] = sends
+        entry["notification"] = sends[-1]
     append(entry)
     return entry
 

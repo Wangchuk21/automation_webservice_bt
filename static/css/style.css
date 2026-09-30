@@ -1613,3 +1613,12 @@ select.custom-select:focus {
   flex-wrap: wrap;
   margin-top: 12px;
 }
+
+/* Only shown when correcting an email that has already gone out. */
+.ds-correction-only {
+  padding: 12px;
+  margin-bottom: 14px;
+  border: 1px solid rgba(251, 191, 36, 0.4);
+  border-radius: var(--radius-sm);
+  background: rgba(251, 191, 36, 0.06);
+}

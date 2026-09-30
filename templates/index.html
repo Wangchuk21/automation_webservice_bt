@@ -507,6 +507,29 @@
            already uses, with the check output in it. -->
       <div id="ds-email-editor" class="ds-email-editor" hidden>
         <h4 class="docs-box-title">Email to <span id="ds-email-to"></span></h4>
+        <!-- Correction only. Why the customer is getting a second email, and to
+             which address -- the first email may have gone to the wrong one, and
+             that is not fixable by changing the wording. -->
+        <div class="form-group ds-correction-only" id="ds-correction-fields" hidden>
+          <label class="form-label" for="ds-correction-reason">
+            What was wrong with the first email <span class="required">*</span>
+          </label>
+          <div class="input-wrapper">
+            <input type="text" id="ds-correction-reason"
+                   placeholder="e.g. The name server address was mistyped" autocomplete="off">
+          </div>
+          <span class="form-hint">
+            This goes at the top of the email, so the customer knows which message
+            to trust. The first email cannot be recalled &mdash; they still have it.
+          </span>
+        </div>
+        <div class="form-group ds-correction-only" id="ds-correction-to-group" hidden>
+          <label class="form-label" for="ds-correction-to">Send to</label>
+          <div class="input-wrapper">
+            <input type="email" id="ds-correction-to" autocomplete="off">
+          </div>
+          <span class="form-hint">Change this if the first email went to the wrong address.</span>
+        </div>
         <div class="form-group">
           <label class="form-label" for="ds-email-subject">Subject</label>
           <div class="input-wrapper">

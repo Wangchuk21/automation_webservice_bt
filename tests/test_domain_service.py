@@ -29,6 +29,7 @@ from fastapi.testclient import TestClient
 
 import activity
 import app as app_module
+from config import settings
 import domain_service
 import notifier
 from dns_check import FORWARDED, MISMATCH, NOT_FORWARDED
@@ -924,3 +925,364 @@ class TestTheNextStepIsWhereTheOperatorIsStanding(unittest.TestCase):
     def test_the_queue_says_which_button_sends(self):
         body = self.html.split('id="domain-service-queue"')[1][:900]
         self.assertIn("Send confirmation", body)
+
+
+class TestCorrectingAnEmailThatAlreadyWentOut(unittest.TestCase):
+    """
+    "I made a mistake and I cannot change, I need an edit button."
+
+    There is no such button and there cannot be. Nothing recalls a message a
+    customer already holds; editing the stored copy would only make the record
+    disagree with their inbox, which is the one thing the record exists to
+    prevent. So the route offered is a second email that says it replaces the
+    first.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.path = Path(self.tmp.name) / "services.jsonl"
+        p = patch.object(domain_service, "log_path", return_value=self.path)
+        p.start(); self.addCleanup(p.stop)
+        domain_service.record_registration(
+            domain="dewachen.bt", customer_name="Dewachen", email="c@x.bt",
+            service="forwarding", forwarding_kind="nameserver",
+            forwarding_target="ns1.vercel-dns.com", registry_action="created")
+        domain_service.record_notification(
+            "dewachen.bt", True, "Sent", subject="Original subject",
+            body="The original text.", recipient="c@x.bt", kind="nameserver")
+
+    def test_the_first_email_is_never_overwritten(self):
+        """The customer still has it. A record that agreed with them about the
+        wrong thing would be worse than no record."""
+        domain_service.record_notification(
+            "dewachen.bt", True, "Sent", subject="Corrected",
+            body="The corrected text.", recipient="c@x.bt", kind="nameserver",
+            correction=True, reason="typo")
+        sends = domain_service.get_state("dewachen.bt")["sends"]
+        self.assertEqual(len(sends), 2)
+        self.assertEqual(sends[0]["body"], "The original text.")
+        self.assertEqual(sends[1]["body"], "The corrected text.")
+
+    def test_a_correction_points_at_what_it_replaces(self):
+        domain_service.record_notification(
+            "dewachen.bt", True, "Sent", subject="C", body="b", recipient="c@x.bt",
+            kind="nameserver", correction=True, reason="typo")
+        sends = domain_service.get_state("dewachen.bt")["sends"]
+        self.assertTrue(sends[1]["correction"])
+        self.assertEqual(sends[1]["correction_of"], sends[0]["at"])
+
+    def test_the_reason_is_kept_for_the_record(self):
+        domain_service.record_notification(
+            "dewachen.bt", True, "Sent", subject="C", body="b", recipient="c@x.bt",
+            kind="nameserver", correction=True, reason="Name server mistyped.")
+        self.assertEqual(domain_service.get_state("dewachen.bt")["sends"][-1]["reason"],
+                         "Name server mistyped.")
+
+    def test_the_latest_send_is_what_the_record_points_at(self):
+        domain_service.record_notification(
+            "dewachen.bt", True, "Sent", subject="C", body="b", recipient="c@x.bt",
+            kind="nameserver", correction=True, reason="typo")
+        self.assertEqual(domain_service.get_state("dewachen.bt")["notification"]["body"], "b")
+
+    def test_a_correction_can_go_to_a_different_address(self):
+        """The first email may have reached the wrong person entirely."""
+        domain_service.record_notification(
+            "dewachen.bt", True, "Sent", subject="C", body="b",
+            recipient="right@x.bt", kind="nameserver", correction=True, reason="wrong address")
+        self.assertEqual(domain_service.get_state("dewachen.bt")["sends"][-1]["to"],
+                         "right@x.bt")
+        self.assertEqual(domain_service.get_state("dewachen.bt")["sends"][0]["to"], "c@x.bt")
+
+    def test_a_failed_correction_is_not_recorded(self):
+        domain_service.record_notification(
+            "dewachen.bt", False, "SMTP refused", body="b", recipient="c@x.bt",
+            kind="nameserver", correction=True, reason="typo")
+        self.assertEqual(len(domain_service.get_state("dewachen.bt")["sends"]), 1)
+
+
+class TestTheCorrectionEmailItself(unittest.TestCase):
+    def test_it_says_it_replaces_the_first(self):
+        """A customer holding two emails about one domain cannot tell which to
+        believe unless the second says so."""
+        from notifier import correction_intro
+        text = correction_intro("dewachen.bt", "The address was mistyped.")
+        self.assertIn("correct an earlier email", text)
+        self.assertIn("replaces what we sent before", text)
+        self.assertIn("The address was mistyped.", text)
+
+    def test_the_subject_says_it_is_a_correction(self):
+        from notifier import correction_subject
+        self.assertIn("Correction", correction_subject("dewachen.bt"))
+
+    def test_a_correction_without_a_reason_is_refused(self):
+        """Otherwise the customer gets a second email that explains nothing."""
+        from notifier import send_forwarding_correction
+        with patch("notifier.settings.SMTP_ENABLED", True):
+            ok, msg = send_forwarding_correction("dewachen.bt", "c@x.bt", "a", "1.2.3.4",
+                                                 reason="  ")
+        self.assertFalse(ok)
+        self.assertIn("reason", msg.lower())
+
+    def test_the_reason_is_required_by_the_api_too(self):
+        """Client-side validation is a convenience; this is the control."""
+        root = Path(__file__).resolve().parent.parent
+        app_src = (root / "app.py").read_text()
+        body = app_src.split("def correct_domain_notification(")[1].split("\n@app.")[0]
+        self.assertTrue("len(reason) < 5" in body, "the reason is not length-checked")
+        self.assertLess(body.index("len(reason) < 5"), body.index("send_forwarding_correction"),
+                        "the reason must be checked before anything is sent")
+
+
+TOKEN = {"X-API-Token": "t"}   # the correction endpoint emails a customer
+
+
+class TestACorrectionAlwaysSaysItIsOne(unittest.TestCase):
+    """
+    Found by testing my own change, not by reading it.
+
+    The correction body was the operator's text whenever they supplied any, which
+    dropped the "this replaces the earlier email" framing. A corrected email could
+    therefore go out looking exactly like a first one: the customer would hold two
+    contradictory messages with nothing to say which was current. That is worse
+    than sending nothing, because it looks like the problem is handled.
+
+    The framing is not the operator's to drop. They edit the correction; the
+    statement that it replaces the earlier email stays.
+    """
+
+    def test_it_says_so_even_when_the_operator_writes_the_whole_body(self):
+        from notifier import correction_body
+        text = correction_body("bt.bt", "The address was mistyped.",
+                              "nameserver", "ns1.druknet.bt", ["ns1.druknet.bt"],
+                              "The correct address is ns1.druknet.bt.")
+        self.assertIn("correct an earlier email", text)
+        self.assertIn("replaces what we sent before", text)
+        self.assertIn("The correct address is ns1.druknet.bt.", text)
+
+    def test_it_says_so_with_the_generated_text(self):
+        from notifier import correction_body
+        text = correction_body("bt.bt", "mistyped", "nameserver",
+                              "ns1.druknet.bt", ["ns1.druknet.bt"])
+        self.assertIn("correct an earlier email", text)
+        self.assertIn("name server ns1.druknet.bt", text)
+
+    def test_the_salutation_appears_once(self):
+        """The intro says Dear Customer and so does the generated text, which
+        read as two letters pasted together."""
+        from notifier import correction_body
+        for body in (None, "Some corrected text."):
+            text = correction_body("bt.bt", "mistyped", "nameserver",
+                                  "ns1.druknet.bt", ["ns1.druknet.bt"], body)
+            self.assertEqual(text.count("Dear Customer"), 1,
+                             "the salutation must not be doubled")
+
+    def test_a_pasted_whole_email_is_not_doubled(self):
+        """An operator who pastes the entire thing back should not get the
+        framing printed twice in one message."""
+        from notifier import correction_body, correction_intro
+        whole = correction_body("bt.bt", "mistyped", "nameserver",
+                                "ns1.druknet.bt", ["ns1.druknet.bt"], "Fixed.")
+        again = correction_body("bt.bt", "mistyped", "nameserver",
+                                "ns1.druknet.bt", ["ns1.druknet.bt"], whole)
+        self.assertEqual(again.count("correct an earlier email"), 1)
+
+    def test_the_api_uses_the_same_rule(self):
+        """The endpoint and the notifier must not disagree about what a
+        correction is, or the record and the customer's inbox diverge again."""
+        root = Path(__file__).resolve().parent.parent
+        src = (root / "app.py").read_text()
+        body = src.split("def correct_domain_notification(")[1].split("\n@app.")[0]
+        self.assertTrue("correction_body(" in body,
+                        "the endpoint must build corrections the same way")
+        self.assertFalse("correction_intro(" in body,
+                         "the endpoint must not assemble the intro itself")
+
+
+class TestTheCorrectionIsRechecked(unittest.TestCase):
+    """
+    The original was justified by a check that passed at the time. A second claim
+    that the domain is forwarded is a new claim about the present, and forwarding
+    can lapse. Correcting a typo about an address that has since stopped
+    resolving would be telling the customer something false twice.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        root = Path(__file__).resolve().parent.parent
+        cls.app = (root / "app.py").read_text()
+
+    def test_the_check_runs_before_the_send(self):
+        body = self.app.split("def correct_domain_notification(")[1].split("\n@app.")[0]
+        self.assertTrue("check_forwarding(" in body, "no re-check before correcting")
+        self.assertLess(body.index("check_forwarding("), body.index("send_forwarding_correction"),
+                        "the re-check must come before the send, not after")
+
+    def test_it_refuses_when_no_longer_forwarded(self):
+        body = self.app.split("def correct_domain_notification(")[1].split("\n@app.")[0]
+        self.assertTrue('result.get("status") != "forwarded"' in body,
+                        "a correction must be refused when the domain is no longer forwarded")
+
+    def test_a_second_correction_is_refused(self):
+        """One correction is the record. A third email needs a reason beyond
+        'the correction was also wrong'."""
+        body = self.app.split("def correct_domain_notification(")[1].split("\n@app.")[0]
+        self.assertTrue("already a correction" in body,
+                        "a third email must not be a free-for-all")
+
+    def test_it_refuses_when_nothing_was_sent_yet(self):
+        """Exercised rather than read: matching the text of a wrapped f-string
+        tests the line wrapping, not the behaviour."""
+        import tempfile as tf
+        from fastapi.testclient import TestClient
+        with tf.TemporaryDirectory() as tmp:
+            with patch.object(domain_service, "log_path",
+                              return_value=Path(tmp) / "services.jsonl"):
+                domain_service.record_registration(
+                    domain="never.bt", customer_name="Never", email="c@x.bt",
+                    service="forwarding", forwarding_kind="nameserver",
+                    forwarding_target="ns1.druknet.bt", registry_action="created")
+                client = TestClient(app_module.app)
+                with patch.object(settings, "API_AUTH_TOKEN", "t"):
+                    r = client.post("/api/v1/domain-services/correct", headers=TOKEN,
+                                    json={"domain": "never.bt", "reason": "typo in it"})
+        self.assertEqual(r.status_code, 409, r.text[:200])
+        self.assertIn("nothing", str(r.json().get("detail", "")).lower())
+
+    def test_it_refuses_a_third_email(self):
+        """One correction is the record. A third needs a reason beyond 'the
+        correction was also wrong'."""
+        import tempfile as tf
+        from fastapi.testclient import TestClient
+        with tf.TemporaryDirectory() as tmp:
+            with patch.object(domain_service, "log_path",
+                              return_value=Path(tmp) / "services.jsonl"):
+                domain_service.record_registration(
+                    domain="twice.bt", customer_name="Twice", email="c@x.bt",
+                    service="forwarding", forwarding_kind="nameserver",
+                    forwarding_target="ns1.druknet.bt", registry_action="created")
+                domain_service.record_notification(
+                    "twice.bt", True, "Sent", subject="a", body="b",
+                    recipient="c@x.bt", kind="nameserver")
+                client = TestClient(app_module.app)
+                with patch.object(settings, "API_AUTH_TOKEN", "t"), \
+                     patch("app.check_forwarding") as chk:
+                    chk.return_value = {"status": "forwarded", "observed": ["ns1.druknet.bt"]}
+                    with patch("notifier._deliver"), \
+                         patch("notifier.settings.SMTP_ENABLED", True), \
+                         patch("notifier.settings.SMTP_HOST", "mail.bt"), \
+                         patch("notifier.settings.SMTP_SSL", True), \
+                         patch("notifier.settings.SMTP_FROM_EMAIL", "h@bt.bt"), \
+                         patch("notifier.settings.SMTP_FROM_NAME", "Support"), \
+                         patch("notifier.settings.SMTP_CC_EMAIL", ""):
+                        first = client.post("/api/v1/domain-services/correct", headers=TOKEN,
+                                            json={"domain": "twice.bt",
+                                                  "reason": "address was mistyped"})
+                        second = client.post("/api/v1/domain-services/correct", headers=TOKEN,
+                                             json={"domain": "twice.bt",
+                                                   "reason": "and again"})
+        self.assertEqual(first.status_code, 200, first.text[:200])
+        self.assertEqual(second.status_code, 409, second.text[:200])
+        self.assertIn("already a correction", str(second.json().get("detail", "")))
+
+    def test_the_first_email_survives_the_correction(self):
+        """The customer still holds it. Asserted through the API, because this is
+        the guarantee the record exists to give."""
+        import tempfile as tf
+        from fastapi.testclient import TestClient
+        with tf.TemporaryDirectory() as tmp:
+            with patch.object(domain_service, "log_path",
+                              return_value=Path(tmp) / "services.jsonl"):
+                domain_service.record_registration(
+                    domain="keep.bt", customer_name="Keep", email="c@x.bt",
+                    service="forwarding", forwarding_kind="nameserver",
+                    forwarding_target="ns1.druknet.bt", registry_action="created")
+                domain_service.record_notification(
+                    "keep.bt", True, "Sent", subject="first subject",
+                    body="The FIRST text.", recipient="c@x.bt", kind="nameserver")
+                client = TestClient(app_module.app)
+                with patch.object(settings, "API_AUTH_TOKEN", "t"), \
+                     patch("app.check_forwarding") as chk:
+                    chk.return_value = {"status": "forwarded", "observed": ["ns1.druknet.bt"]}
+                    with patch("notifier._deliver"), \
+                         patch("notifier.settings.SMTP_ENABLED", True), \
+                         patch("notifier.settings.SMTP_HOST", "mail.bt"), \
+                         patch("notifier.settings.SMTP_SSL", True), \
+                         patch("notifier.settings.SMTP_FROM_EMAIL", "h@bt.bt"), \
+                         patch("notifier.settings.SMTP_FROM_NAME", "Support"), \
+                         patch("notifier.settings.SMTP_CC_EMAIL", ""):
+                        r = client.post("/api/v1/domain-services/correct", headers=TOKEN,
+                                        json={"domain": "keep.bt",
+                                              "reason": "address was mistyped",
+                                              "body": "The CORRECTED text."})
+                self.assertEqual(r.status_code, 200, r.text[:200])
+                state = domain_service.get_state("keep.bt")
+        self.assertEqual(len(state["sends"]), 2)
+        # The first is untouched.
+        self.assertEqual(state["sends"][0]["body"], "The FIRST text.")
+        # The second is recorded as it was actually sent, framing included, so the
+        # record and the customer's inbox match.
+        self.assertIn("The CORRECTED text.", state["sends"][1]["body"])
+        self.assertIn("correct an earlier email", state["sends"][1]["body"])
+        self.assertTrue(state["sends"][1]["correction"])
+
+
+
+class TestTheCorrectionIsOfferedInTheRightPlace(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        root = Path(__file__).resolve().parent.parent
+        cls.js = (root / "static" / "js" / "app.js").read_text()
+        cls.html = (root / "templates" / "index.html").read_text()
+
+    def test_a_notified_domain_offers_a_correction(self):
+        self.assertIn("Send correction", self.js)
+
+    def test_not_offered_when_the_last_email_was_already_a_correction(self):
+        body = js_function(self.js, "loadDomainServiceQueue")
+        self.assertIn("r.notification.correction", body)
+
+    def test_the_reason_field_exists(self):
+        self.assertIn('id="ds-correction-reason"', self.html)
+
+    def test_the_recipient_can_be_changed(self):
+        """The first email may have gone to the wrong address, and that is not
+        fixable by changing the wording."""
+        self.assertIn('id="ds-correction-to"', self.html)
+
+    def test_it_starts_from_what_was_sent(self):
+        """Fixing a typo must not mean retyping the message and risking a second
+        mistake."""
+        body = js_function(self.js, "openCorrectionEditor")
+        self.assertIn("last.body", body)
+        self.assertIn("last.subject", body)
+
+    def test_the_send_button_routes_to_the_right_flow(self):
+        """One button, two flows. Left ambiguous, the first domain corrected
+        would send as a fresh notification."""
+        self.assertIn("correctingDomain ? sendCorrection()", self.js)
+
+    def test_opening_a_fresh_draft_clears_the_correction_state(self):
+        body = js_function(self.js, "openEmailEditor")
+        self.assertIn("hideCorrectionFields()", body)
+
+    def test_closing_clears_it_too(self):
+        self.assertIn("hideCorrectionFields()", js_function(self.js, "closeEmailEditor"))
+
+    def test_the_editor_is_still_read_only_when_viewing_a_sent_email(self):
+        """Viewing a sent email is reading the record. It must not become a way
+        to rewrite what a customer was told."""
+        self.assertIn("readOnly = true", js_function(self.js, "showSentEmail"))
+
+    def test_the_editor_strips_the_framing_before_offering_it(self):
+        """The server adds it back on every correction. Showing the operator
+        their own text with the framing already on it invites a second copy."""
+        body = js_function(self.js, "openCorrectionEditor")
+        self.assertTrue("stripCorrectionIntro" in body)
+        self.assertTrue("stripCorrectionIntro" in self.js)
+
+    def test_the_strip_only_removes_the_framing(self):
+        """An ordinary forwarded confirmation must come back untouched -- the
+        words "disregard the earlier message" do not appear in it, and if they
+        ever did, cutting at the first one would silently drop real content."""
+        self.assertIn("function stripCorrectionIntro", self.js)
