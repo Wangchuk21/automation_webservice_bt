@@ -1642,3 +1642,11 @@ select.custom-select:focus {
   color: #fcd34d;
   font-weight: 600;
 }
+
+.ds-manual-send {
+  margin-top: 16px;
+  padding: 14px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+}

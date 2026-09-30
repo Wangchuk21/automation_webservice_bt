@@ -537,6 +537,47 @@
           </button>
           <button type="button" class="btn btn-ghost btn-sm" id="ds-fe-cancel">Cancel</button>
         </div>
+
+        <!-- Where the send button is not used because the email was already
+             written from a mail client. Recording it stops the row offering to
+             send the same news twice. -->
+        <div class="ds-manual-send" id="ds-manual-send" hidden>
+          <h4 class="docs-box-title">Already emailed this customer by hand</h4>
+          <p class="form-hint">
+            Recording this stops the page offering to email them again. It stores
+            that a send happened, not the wording &mdash; the message went out from
+            your mail client and this system never saw it, so no copy is kept.
+          </p>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label" for="ds-ms-to">Sent to <span class="required">*</span></label>
+              <div class="input-wrapper">
+                <input type="email" id="ds-ms-to" autocomplete="off">
+              </div>
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="ds-ms-when">When (optional)</label>
+              <div class="input-wrapper">
+                <input type="text" id="ds-ms-when" placeholder="Leave blank for now"
+                       autocomplete="off">
+              </div>
+              <span class="form-hint">Fill this in if you are noting it up afterwards.</span>
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="ds-ms-note">Note (optional)</label>
+            <div class="input-wrapper">
+              <input type="text" id="ds-ms-note"
+                     placeholder="e.g. Sent from my Outlook, quoted their ticket" autocomplete="off">
+            </div>
+          </div>
+          <div class="ds-email-actions">
+            <button type="button" class="btn btn-primary btn-sm" id="ds-ms-save">
+              Record that it was sent
+            </button>
+            <button type="button" class="btn btn-ghost btn-sm" id="ds-ms-cancel">Cancel</button>
+          </div>
+        </div>
       </div>
 
       <!-- The email, before it is sent. Shown so the wording can be read, and

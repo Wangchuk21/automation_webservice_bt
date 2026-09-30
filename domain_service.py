@@ -264,9 +264,12 @@ def update_forwarding(domain: str, kind: str, target: str) -> Dict[str, Any]:
     internet to match what somebody hoped it was, and the whole reason this page
     checks rather than trusts is that the two can differ.
 
-    Once the customer has been emailed, the record describes a claim that was made
-    to them, so it stops being editable. That case belongs to the correction flow,
-    which sends a second email rather than quietly rewriting the first.
+    Stays editable after the customer has been emailed, including when the email
+    was sent by hand from outside this system. The target is BT's own record of
+    what the forwarding was requested to be and the customer is never told it; the
+    email is built from the observed values instead. What must not change once a
+    send exists is `observed` and the recorded email, because those are what the
+    customer actually holds.
     """
     domain = normalise_domain(domain)
     previous = get_state(domain)
@@ -277,11 +280,17 @@ def update_forwarding(domain: str, kind: str, target: str) -> Dict[str, Any]:
             f"'{domain}' is recorded as {previous.get('service')}, which has no "
             f"forwarding to correct. Its hosting account is managed by the "
             f"provisioning form.")
-    if previous.get("status") == NOTIFIED:
-        raise ValueError(
-            f"'{domain}' was already emailed to the customer on "
-            f"{previous.get('notified_at')}, so the record of what they were told "
-            f"is fixed. Send a correction instead.")
+    # Deliberately editable even after the customer has been emailed.
+    #
+    # I first locked this once a send existed, on the reasoning that the record
+    # then describes a claim made to the customer. That was wrong about which
+    # field this is. The target is BT's own note of what the forwarding was
+    # requested to be; the customer is never told it. The email is built from
+    # `observed` -- what DNS actually returned -- so correcting the target cannot
+    # change or contradict anything the customer was sent.
+    #
+    # What must stay fixed once a send exists is `observed`, and the email text
+    # in the record. Those are what the customer holds.
 
     kind = (kind or "").strip().lower()
     if kind not in ("a", "nameserver"):
@@ -304,6 +313,64 @@ def update_forwarding(domain: str, kind: str, target: str) -> Dict[str, Any]:
         "target_edited_at": _now(),
         "previous_target": previous.get("forwarding_target", ""),
         "previous_kind": previous.get("forwarding_kind", ""),
+        "updated_at": _now(),
+    }
+    append(entry)
+    return entry
+
+
+def record_manual_send(domain: str, recipient: str, note: str = "",
+                       at: str = "") -> Dict[str, Any]:
+    """
+    Note that the customer was emailed by hand, from outside this system.
+
+    The operators here sometimes write to a customer from their own mail client
+    rather than through this page, which is a perfectly reasonable thing to do.
+    The trouble is that this system then has no idea, and the row keeps offering
+    a Send confirmation button for a customer who has already been told -- one
+    press and they receive the same news twice.
+
+    So the send is recorded, and the existing guard refuses any further one. The
+    recorded copy says plainly that it is a note and not the email: the wording
+    went out from a mail client and this system never saw it, and pretending
+    otherwise would put a fabrication in the one record meant to be evidence.
+
+    `at` may be given so an operator can backdate a note written after the fact,
+    which happens when the ticket is filled in later than the email.
+    """
+    domain = normalise_domain(domain)
+    previous = get_state(domain)
+    if previous is None:
+        raise ValueError(f"No domain service is recorded for '{domain}'.")
+    if not (recipient or "").strip():
+        raise ValueError("Enter the address the email was sent to.")
+
+    sends = list(previous.get("sends") or [])
+    if sends and sends[-1].get("at") == (at or _now()):
+        return previous
+
+    stamp = (at or "").strip() or _now()
+    note = (note or "").strip()
+    sends.append({
+        "at": stamp,
+        "to": (recipient or "").strip(),
+        "subject": "",
+        "body": "",
+        "manual": True,
+        "note": note or ("Emailed by hand from outside this system. The wording was "
+                         "not seen here, so no copy is stored."),
+        "kind": previous.get("forwarding_kind", ""),
+        "correction": False,
+        "correction_of": "",
+        "reason": "",
+    })
+    entry = {
+        **previous,
+        "status": NOTIFIED,
+        "notified_at": stamp,
+        "notification_message": f"Noted as emailed by hand to {recipient.strip()}.",
+        "sends": sends,
+        "notification": sends[-1],
         "updated_at": _now(),
     }
     append(entry)

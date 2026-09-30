@@ -1449,6 +1449,10 @@ function initDomainServices() {
     .addEventListener("click", closeForwardingEditor);
   document.getElementById("ds-fe-target")
     .addEventListener("input", describeParsedTarget);
+  document.getElementById("ds-ms-save")
+    .addEventListener("click", saveManualSend);
+  document.getElementById("ds-ms-cancel")
+    .addEventListener("click", closeManualSend);
   document.getElementById("ds-fe-kind")
     .addEventListener("change", describeParsedTarget);
   document.getElementById("ds-email-cancel")
@@ -1575,18 +1579,22 @@ async function loadDomainServiceQueue() {
       <td>${actionable
             ? `<button class="btn btn-secondary btn-sm" onclick="verifyDomain('${esc(r.domain)}')">Check</button>
                ${r.service === "forwarding"
-                 ? ` <button class="btn btn-ghost btn-sm" onclick="openForwardingEditor('${esc(r.domain)}')">Correct nameserver</button>`
+                 ? ` <button class="btn btn-ghost btn-sm" onclick="openForwardingEditor('${esc(r.domain)}')">Correct nameserver</button>
+                    <button class="btn btn-ghost btn-sm" onclick="openManualSend('${esc(r.domain)}')">Already emailed by hand?</button>`
                  : ""}
                ${r.service === "forwarding"
                  ? ` <button class="btn btn-primary btn-sm" onclick="notifyDomain(this, '${esc(r.domain)}')">Send confirmation</button>`
                  : ""}`
-            : (r.notification && r.notification.body
+            : (r.notification && r.notification.manual
+                ? `<span class="pill pill-pending">emailed by hand</span>
+                   <button class="btn btn-ghost btn-sm" onclick="showSentEmailForDomain('${esc(r.domain)}')">View note</button>`
+                : (r.notification && r.notification.body
                 ? `<span class="muted">told</span>
                    <button class="btn btn-ghost btn-sm" onclick="showSentEmailForDomain('${esc(r.domain)}')">View sent email</button>
                    ${!((r.sends || []).length && r.notification.correction)
                      ? ` <button class="btn btn-secondary btn-sm" onclick="openCorrectionEditor('${esc(r.domain)}')">Send correction</button>`
                      : ""}`
-                : '<span class="muted">told</span>')}</td>
+                : '<span class="muted">told</span>'))}</td>
     </tr>`;
 
     box.innerHTML = `<table class="surrender-table">
@@ -1814,7 +1822,10 @@ async function showSentEmail(domain, sent) {
   const n = sent || null;
 
   document.getElementById("ds-email-subject").value = n ? n.subject : "";
-  document.getElementById("ds-email-body").value = n ? n.body : "";
+  document.getElementById("ds-email-body").value = n
+    ? (n.body || (n.manual ? (n.note || "Emailed by hand. No copy was stored.")
+                           : ""))
+    : "";
 
   // Rewritten wholesale rather than mutated: the heading holds a span with an
   // id, and two elements sharing an id makes getElementById pick one at random.
@@ -2111,6 +2122,7 @@ async function openForwardingEditor(domain) {
     }
   } catch (e) { showToast(e.message, "error"); return; }
 
+  closeManualSend();
   forwardingEditDomain = domain;
   document.getElementById("ds-fe-domain").textContent = domain;
   document.getElementById("ds-fe-kind").value = state.forwarding_kind || "nameserver";
@@ -2159,6 +2171,78 @@ async function saveForwardingCorrection() {
     // Check straight away: the point of correcting the target is to find out
     // whether the forwarding was right all along.
     await verifyDomain(domain);
+  } catch (e) {
+    showToast(e.message, "error");
+  }
+}
+
+// ========================================================
+// ALREADY EMAILED BY HAND
+//
+// Operators here sometimes write to a customer from their own mail client rather
+// than through this page, which is reasonable. The trouble is that the system
+// then does not know, and the row keeps offering a Send button for someone who
+// has already been told -- one press and they get the same news twice.
+//
+// This records that a send happened. It deliberately stores no copy of the
+// wording: the message left from a mail client, and inventing one would put a
+// fabrication into the one record that is meant to be evidence.
+let manualSendDomain = null;
+
+async function openManualSend(domain) {
+  const box = document.getElementById("ds-manual-send");
+  if (!box) return;
+  closeForwardingEditor();
+  manualSendDomain = domain;
+  document.getElementById("ds-ms-to").value = "";
+  document.getElementById("ds-ms-when").value = "";
+  document.getElementById("ds-ms-note").value = "";
+  box.hidden = false;
+  box.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  document.getElementById("ds-ms-to").focus();
+}
+
+function closeManualSend() {
+  const box = document.getElementById("ds-manual-send");
+  if (box) box.hidden = true;
+  manualSendDomain = null;
+}
+
+async function saveManualSend() {
+  if (!manualSendDomain) return;
+  const domain = manualSendDomain;
+  const to = document.getElementById("ds-ms-to").value.trim();
+  if (!to || to.indexOf("@") < 0) {
+    showToast("Enter the address the email went to", "error");
+    return;
+  }
+  if (!window.confirm(
+    `Record that ${domain} was emailed to ${to} by hand?\\n\\n`
+    + `This stops the page sending them a second copy of the same news.\\n`
+    + `No copy of the wording is stored -- it went from your mail client.`
+  )) return;
+
+  try {
+    const res = await fetch(
+      `/api/v1/domain-services/${encodeURIComponent(domain)}/manual-send`,
+      {
+        method: "POST",
+        headers: apiHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({
+          recipient: to,
+          note: document.getElementById("ds-ms-note").value.trim(),
+          at: document.getElementById("ds-ms-when").value.trim(),
+        }),
+      });
+    const data = await res.json();
+    if (!res.ok) {
+      showToast((data && data.detail) || `HTTP ${res.status}`, "error");
+      return;
+    }
+    showToast(data.message || "Recorded", "success");
+    closeManualSend();
+    await loadDomainServiceQueue();
+    await loadActivity();
   } catch (e) {
     showToast(e.message, "error");
   }

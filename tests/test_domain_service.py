@@ -1349,16 +1349,35 @@ class TestCorrectingTheForwardingTarget(unittest.TestCase):
         params = list(inspect.signature(domain_service.update_forwarding).parameters)
         self.assertEqual(params, ["domain", "kind", "target"])
 
-    def test_it_refuses_once_the_customer_has_been_emailed(self):
-        """The record then describes a claim that was made to them, so it stops
-        being editable. That case belongs to the correction flow."""
+    def test_it_stays_editable_after_the_customer_has_been_emailed(self):
+        """
+        I first locked this, on the reasoning that the record then describes a
+        claim made to the customer. That was wrong about which field this is. The
+        target is BT's own note of what the forwarding was requested to be, and
+        the customer is never told it -- the email is built from the observed
+        values. So correcting it cannot change or contradict anything the customer
+        was sent, and an operator who emailed by hand from their own machine would
+        otherwise be locked out of their own note.
+        """
         domain_service.record_notification(
             "goldentakinholidays.bt", True, "Sent", subject="s", body="b",
             recipient="a@x.bt", kind="nameserver")
-        with self.assertRaises(ValueError) as cm:
-            domain_service.update_forwarding("goldentakinholidays.bt", "nameserver",
-                                             "ns1.other.bt")
-        self.assertIn("correction", str(cm.exception).lower())
+        e = domain_service.update_forwarding("goldentakinholidays.bt", "nameserver",
+                                             "ns1.correct.bt")
+        self.assertEqual(e["forwarding_target"], "ns1.correct.bt")
+
+    def test_but_the_observed_evidence_is_untouched(self):
+        """The part that is what the customer was actually told."""
+        domain_service.record_notification(
+            "goldentakinholidays.bt", True, "Sent", subject="s",
+            body="ns1.real.bt", recipient="a@x.bt", kind="nameserver")
+        domain_service.get_state("goldentakinholidays.bt")
+        e = domain_service.update_forwarding("goldentakinholidays.bt", "nameserver",
+                                             "ns1.correct.bt")
+        self.assertEqual(e["sends"][0]["body"], "ns1.real.bt",
+                         "the email the customer holds must not change")
+        self.assertEqual(e["previous_target"],
+                         "lina.ns.cloudflare.com.sleo.ns.cloudflare.com.")
 
     def test_it_refuses_for_a_hosted_domain(self):
         domain_service.record_registration(
@@ -1423,3 +1442,131 @@ class TestTheForwardingEditor(unittest.TestCase):
         for el in ('id="ds-forwarding-editor"', 'id="ds-fe-kind"',
                    'id="ds-fe-target"', 'id="ds-fe-parsed"'):
             self.assertTrue(el in self.html, f"{el} is missing")
+
+
+class TestRecordingAnEmailSentByHand(unittest.TestCase):
+    """
+    The operator wrote to the customer from their own mail client. Reasonable
+    thing to do, and the system had no idea -- so the row went on offering a Send
+    button for someone who had already been told. One press and they received the
+    same news twice.
+
+    Recording it stops that. What it must not do is invent a copy of the wording:
+    the message left from a mail client, and this system never saw it. A
+    fabricated email in the one record meant to be evidence is worse than an
+    honest gap.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.path = Path(self.tmp.name) / "services.jsonl"
+        p = patch.object(domain_service, "log_path", return_value=self.path)
+        p.start(); self.addCleanup(p.stop)
+        domain_service.record_registration(
+            domain="goldentakinholidays.bt", customer_name="Ashika Rai",
+            email="a@x.bt", service="forwarding", forwarding_kind="nameserver",
+            forwarding_target="lina.ns.cloudflare.com, alec.ns.cloudflare.com",
+            registry_action="created")
+
+    def test_it_marks_the_domain_as_emailed(self):
+        e = domain_service.record_manual_send("goldentakinholidays.bt", "a@x.bt")
+        self.assertEqual(e["status"], domain_service.NOTIFIED)
+
+    def test_no_copy_of_the_wording_is_stored(self):
+        e = domain_service.record_manual_send("goldentakinholidays.bt", "a@x.bt")
+        self.assertEqual(e["sends"][-1]["body"], "")
+        self.assertNotIn("Dear Customer", e["sends"][-1]["body"])
+
+    def test_it_says_plainly_that_no_copy_is_stored(self):
+        e = domain_service.record_manual_send("goldentakinholidays.bt", "a@x.bt")
+        self.assertTrue(e["sends"][-1]["manual"])
+        self.assertIn("no copy is stored", e["sends"][-1]["note"].lower())
+
+    def test_an_operators_note_is_kept(self):
+        e = domain_service.record_manual_send(
+            "goldentakinholidays.bt", "a@x.bt", "Sent from Outlook, quoted her ticket")
+        self.assertIn("Outlook", e["sends"][-1]["note"])
+
+    def test_it_can_be_backdated(self):
+        """A ticket is often filled in after the email went out."""
+        e = domain_service.record_manual_send("goldentakinholidays.bt", "a@x.bt",
+                                              at="2026-09-28T10:00:00+06:00")
+        self.assertEqual(e["notified_at"], "2026-09-28T10:00:00+06:00")
+
+    def test_the_target_is_still_correctable_afterwards(self):
+        """A manual send is a send, and the target is BT's own note of intent
+        rather than anything the customer was told."""
+        domain_service.record_manual_send("goldentakinholidays.bt", "a@x.bt")
+        e = domain_service.update_forwarding("goldentakinholidays.bt", "nameserver",
+                                             "ns1.correct.bt, ns2.correct.bt")
+        self.assertEqual(e["forwarding_target"], "ns1.correct.bt, ns2.correct.bt")
+
+    def test_it_needs_a_recipient(self):
+        with self.assertRaises(ValueError):
+            domain_service.record_manual_send("goldentakinholidays.bt", "  ")
+
+    def test_it_needs_a_known_domain(self):
+        with self.assertRaises(ValueError):
+            domain_service.record_manual_send("never-seen.bt", "a@x.bt")
+
+    def test_it_refuses_to_fake_a_second_send_at_the_same_moment(self):
+        """A double-click must not write two notes."""
+        domain_service.record_manual_send("goldentakinholidays.bt", "a@x.bt",
+                                          at="2026-09-28T10:00:00+06:00")
+        e = domain_service.record_manual_send("goldentakinholidays.bt", "a@x.bt",
+                                              at="2026-09-28T10:00:00+06:00")
+        self.assertEqual(len(e["sends"]), 1)
+
+
+class TestTheManualSendStopsASecondEmail(unittest.TestCase):
+    def test_the_existing_guard_now_fires(self):
+        """The whole point. Without it the row would offer to send a customer the
+        same news twice."""
+        import tempfile as tf
+        from fastapi.testclient import TestClient
+        TOKEN = {"X-API-Token": "t"}
+        with tf.TemporaryDirectory() as tmp:
+            with patch.object(domain_service, "log_path",
+                              return_value=Path(tmp) / "services.jsonl"):
+                domain_service.record_registration(
+                    domain="manual.bt", customer_name="M", email="a@x.bt",
+                    service="forwarding", forwarding_kind="nameserver",
+                    forwarding_target="ns1.druknet.bt", registry_action="created")
+                client = TestClient(app_module.app)
+                with patch.object(settings, "API_AUTH_TOKEN", "t"):
+                    r = client.post("/api/v1/domain-services/manual.bt/manual-send",
+                                    headers=TOKEN,
+                                    json={"recipient": "a@x.bt",
+                                          "note": "sent from Outlook"})
+                self.assertEqual(r.status_code, 200, r.text[:200])
+                # Now a real send is attempted.
+                domain_service.get_state("manual.bt")
+                with patch.object(settings, "API_AUTH_TOKEN", "t"), \
+                     patch("notifier._deliver") as deliver, \
+                     patch("notifier.settings.SMTP_ENABLED", True):
+                    second = client.post("/api/v1/domain-services/notify",
+                                         headers=TOKEN, json={"domain": "manual.bt"})
+        self.assertEqual(second.status_code, 409, second.text[:200])
+        self.assertEqual(deliver.call_count, 0, "no second email may go out")
+
+    def test_the_row_offers_the_manual_note(self):
+        root = Path(__file__).resolve().parent.parent
+        js = (root / "static" / "js" / "app.js").read_text()
+        html = (root / "templates" / "index.html").read_text()
+        self.assertIn("Already emailed by hand?", js)
+        self.assertIn('id="ds-manual-send"', html)
+        self.assertIn('id="ds-ms-to"', html)
+
+    def test_a_manual_note_is_not_offered_as_an_email_to_read(self):
+        """There is no body. Offering "View sent email" would open an empty box
+        and imply a copy exists."""
+        js = (Path(__file__).resolve().parent.parent / "static" / "js" / "app.js").read_text()
+        body = js_function(js, "showSentEmail")
+        self.assertIn("n.manual", body)
+        self.assertIn("No copy was stored", body)
+
+    def test_the_two_panels_do_not_stack(self):
+        js = (Path(__file__).resolve().parent.parent / "static" / "js" / "app.js").read_text()
+        self.assertIn("closeForwardingEditor()", js_function(js, "openManualSend"))
+        self.assertIn("closeManualSend()", js_function(js, "openForwardingEditor"))

@@ -1497,6 +1497,36 @@ def update_domain_forwarding(domain: str, payload: DomainForwardingUpdate):
     }
 
 
+class DomainManualSend(BaseModel):
+    recipient: str
+    note: str = ""
+    # Optional, so a note written up after the email can say when it actually went.
+    at: str = ""
+
+
+@app.post("/api/v1/domain-services/{domain}/manual-send",
+          dependencies=[Depends(require_api_token)])
+def record_domain_manual_send(domain: str, payload: DomainManualSend):
+    """
+    Record that the customer was emailed by hand, so they are not emailed again.
+
+    Not a workaround for the notify guard and not a way to fake a send. The
+    recorded copy says it is a note and not the email, because the wording went
+    out from a mail client and this system never saw it. What it buys is the one
+    thing that matters here: the row stops offering to send a second copy of news
+    a customer has already had.
+    """
+    try:
+        entry = domain_service.record_manual_send(
+            domain, payload.recipient, payload.note, payload.at)
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    return {"success": True, "service": entry,
+            "sent": entry.get("notification", {}),
+            "message": f"Noted: {entry['domain']} was emailed by hand to "
+                       f"{payload.recipient.strip()}. No further email will be sent."}
+
+
 @app.get("/api/v1/domain-services/{domain}", dependencies=[Depends(require_api_token)])
 def get_domain_service(domain: str):
     """
