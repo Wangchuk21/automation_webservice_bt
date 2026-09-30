@@ -161,6 +161,22 @@ class Config:
     DOMAIN_SERVICE_LOG: str = os.getenv("DOMAIN_SERVICE_LOG",
                                         "./data/domains/services.jsonl")
 
+    # Certificates for newly hosted domains. A certificate is not attempted
+    # unless the domain actually points at the server, because Let's Encrypt
+    # will refuse anyway and repeated failures burn a rate limit shared by every
+    # customer on the box. Both panels renew on their own once a certificate
+    # exists, so there is no renewal cron to maintain here.
+    SSL_ENABLED: bool = os.getenv("SSL_ENABLED", "true").lower() in ("1", "true", "yes")
+    SSL_REQUIRE_DNS_MAPPING: bool = os.getenv("SSL_REQUIRE_DNS_MAPPING", "true").lower() in ("1", "true", "yes")
+
+    # cPanel AutoSSL is not installed on thimpchu, so the exact WHM function name
+    # could not be read off the server the way ipv6_enable_account was. Rather
+    # than ship a guessed call that would report a plausible but wrong reason
+    # when it fails, the cPanel path refuses to guess and says so. Set this only
+    # after `whmapi1 --output=json autossl_queue_run` has been confirmed on the
+    # server and the real function name substituted in ssl_service.
+    CPANEL_AUTOSSL_VERIFIED: bool = os.getenv("CPANEL_AUTOSSL_VERIFIED", "false").lower() in ("1", "true", "yes")
+
     # The cross-cutting "what have we done" feed, shown on the dashboard so a
     # reload does not lose the answer. Under /app/data with the surrender audit
     # trail, on the volume that is already backed up. It does not replace those

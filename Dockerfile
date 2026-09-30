@@ -49,7 +49,7 @@ COPY --from=builder /opt/venv /opt/venv
 WORKDIR /app
 # suspension.py must be listed here: app.py imports it, so omitting it makes the
 # container fail at startup rather than degrade. bscs_client.py likewise.
-COPY --chown=provisioner:provisioner app.py cli.py config.py notifier.py nic_client.py tls_config.py surrender.py suspension.py bscs_client.py dns_check.py domain_service.py activity.py ./
+COPY --chown=provisioner:provisioner app.py cli.py config.py notifier.py nic_client.py tls_config.py surrender.py suspension.py bscs_client.py dns_check.py domain_service.py activity.py ssl_service.py ./
 COPY --chown=provisioner:provisioner provisioners/ ./provisioners/
 COPY --chown=provisioner:provisioner templates/ ./templates/
 COPY --chown=provisioner:provisioner static/ ./static/

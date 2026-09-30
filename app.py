@@ -33,6 +33,7 @@ from nic_client import (
 from bscs_client import BSCSClient, BSCSError
 import activity
 import domain_service
+import ssl_service
 from domain_service import AWAITING_DNS, NOTIFIED, VERIFIED
 from dns_check import (
     FORWARD_KINDS, FORWARDED, check_domain, check_forwarding, lookup_records,
@@ -502,9 +503,22 @@ def run_post_create_steps(result) -> list:
     elif result.panel == "directadmin":
         prov = get_da_provisioner()
         steps.append(prov.allow_sftp_user(result.username))
+    # Last, and only when the domain already points here. A certificate is the
+    # one step that is actively harmful to attempt blindly: Let's Encrypt fails
+    # for a domain that does not resolve to this server, and the failures count
+    # against a rate limit shared by every customer on the box. See
+    # ssl_service for the full reasoning.
+    steps.append(ssl_service.enable_ssl(result.panel, result.username, result.domain))
     for step in steps:
+        status = step.get("status") or ("ok" if step.get("success") else "failed")
         if step.get("success"):
             logger.info("Post-create %s for %s: %s",
+                        step.get("step"), result.username, step.get("message"))
+        elif status in (ssl_service.SKIPPED, ssl_service.UNSUPPORTED):
+            # Not a failure and nobody's fault. A domain that does not point here
+            # yet, or a panel without a licence, is a fact about the world rather
+            # than a mistake, and warning about it trains people to ignore warnings.
+            logger.info("Post-create %s not done for %s: %s",
                         step.get("step"), result.username, step.get("message"))
         else:
             # Deliberately a warning, not an exception: the account is created.

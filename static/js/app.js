@@ -815,18 +815,34 @@ function renderPostCreate(steps) {
   if (!box) return;
   if (!steps || !steps.length) { box.classList.add("hidden"); box.innerHTML = ""; return; }
 
+  // A step that was skipped or is unsupported did not go wrong. Counting it as a
+  // failure put a red warning on a domain that simply has not been pointed at
+  // the server yet, which trains people to ignore warnings -- and the steps
+  // that really did fail get read the same way.
+  const skipped = (s) => s.status === "skipped" || s.status === "unsupported";
   const ok = steps.filter((s) => s.success).length;
-  const bad = steps.length - ok;
-  box.className = `res-dns-status ${bad ? "dns-warn" : "dns-ok"}`;
+  const notDone = steps.filter((s) => !s.success && !skipped(s)).length;
+  const notAttempted = steps.filter((s) => !s.success && skipped(s)).length;
+
+  box.className = `res-dns-status ${notDone ? "dns-warn" : "dns-ok"}`;
   box.classList.remove("hidden");
+
+  const badge = notDone ? `${notDone} step needs attention`
+    : (notAttempted ? "Setup complete" : "Setup steps complete");
   box.innerHTML = `<div class="dns-head">
-      <span class="dns-badge">${bad ? `${bad} step needs attention` : "Setup steps complete"}</span>
+      <span class="dns-badge">${badge}</span>
       <code>${ok} of ${steps.length} done</code>
-    </div>` + steps.map((s) => `<p class="${s.success ? "pc-ok" : "pc-bad"}">
-      ${s.success ? "✓" : "⚠"} <strong>${esc(s.step || "step")}</strong> — ${esc(s.message || "")}
-    </p>`).join("") +
-    (bad ? `<p class="pc-note">The hosting account was created. Only the step above
-      did not complete; the customer cannot use that part until it is done.</p>` : "");
+    </div>` + steps.map((s) => {
+      const cls = s.success ? "pc-ok" : (skipped(s) ? "pc-skip" : "pc-bad");
+      const mark = s.success ? "✓" : (skipped(s) ? "○" : "⚠");
+      const label = s.status === "unsupported" ? "not available" : (s.step || "step");
+      return `<p class="${cls}">${mark} <strong>${esc(label)}</strong> — ${esc(s.message || "")}</p>`;
+    }).join("") +
+    (notDone ? `<p class="pc-note">The hosting account was created. Only the step above
+      did not complete; the customer cannot use that part until it is done.</p>` : "") +
+    (notAttempted ? `<p class="pc-note">Nothing to fix above: those steps were not
+      attempted because the preconditions are not met yet, and the account is
+      unaffected. Re-run them once the domain points at this server.</p>` : "");
 }
 
 function renderNicStatus(nic) {

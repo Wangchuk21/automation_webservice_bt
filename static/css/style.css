@@ -1650,3 +1650,10 @@ select.custom-select:focus {
   border-radius: var(--radius-sm);
   background: var(--bg-input);
 }
+
+/* A step that was not attempted: the domain does not point here yet, or the
+   panel has no licence. Not a fault, and deliberately not styled like one --
+   a red warning on a healthy account is how warnings stop being read. */
+.pc-skip {
+  color: var(--text-muted);
+}
