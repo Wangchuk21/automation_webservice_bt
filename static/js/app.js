@@ -246,7 +246,7 @@ async function loadSuspensionReport() {
       (d.last_attempt_traceback && d.last_attempt_ok === false
         ? `<details class="suspension-trace"><summary>Why the job failed</summary>`
           + `<pre>${esc(d.last_attempt_traceback)}</pre></details>`
-        : "")
+        : "") +
       (d.bscs_complete ? "" : ` <strong style="color:#fcd34d">· INCOMPLETE: ${esc(d.bscs_note)}</strong>`);
 
     renderSuspensionCandidates(d.candidates || [], d.candidates_all || []);
