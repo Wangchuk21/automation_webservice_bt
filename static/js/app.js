@@ -530,6 +530,16 @@ class RegistryForm {
       default: break;
     }
     if (field.source === "derived" && field.derived_from) {
+      // The live value of the field it copies, before falling back further.
+      // build_registry_payload already resolves it this way server-side -- an
+      // empty value is dropped and the parent is used -- so without this the
+      // form showed four empty boxes for contacts that were going to be sent
+      // filled in, and listed them as "nic.bt.bt will reject this". The form
+      // and the payload have to agree, or the operator is warned about work
+      // that was never going to be needed.
+      const parentEl = this.input(field.derived_from);
+      const live = ((parentEl && parentEl.value) || "").trim();
+      if (live) return live;
       return this.fallback(field.derived_from, regField(field.derived_from) || {});
     }
     if (field.source === "default") return field.default || "";
@@ -539,6 +549,8 @@ class RegistryForm {
   // Repaint every field the operator has not touched.
   sync() {
     if (!REG_SPEC || !this.loaded) return;
+    // Evaluated after the fields are repainted, so the comparison is against the
+    // values now on screen rather than the ones before this edit.
     REG_SPEC.fields.forEach((f) => {
       if (this.touched.has(f.name)) return;
       const el = this.input(f.name);
@@ -558,6 +570,7 @@ class RegistryForm {
       if (group) group.classList.toggle("is-touched", this.touched.has(f.name));
     });
     this.renderMissing();
+    this.refreshMirrorGroups();
   }
 
   // The resolved values, as they will be submitted. Blank entries are omitted
@@ -580,11 +593,40 @@ class RegistryForm {
     if (!REG_SPEC) return [];
     return REG_SPEC.fields
       .filter((f) => f.required)
+      // A derived field is never the operator's job, so it is never listed. It
+      // fills from the field it copies, and build_registry_payload resolves it
+      // again server-side; listing it asked for work that was never necessary,
+      // and if the parent is empty too then it is the parent that gets listed,
+      // which is the thing actually needing attention.
+      .filter((f) => f.source !== "derived")
       .filter((f) => {
         const el = this.input(f.name);
         return !el || !(el.value || "").trim();
       })
       .map((f) => f.name);
+  }
+
+  // A group whose every field is just a copy of the registrant, and is currently
+  // equal to it. Nothing to do there, so it is collapsed out of the way and the
+  // operator is only shown it if they need it to differ.
+  groupMirrors(groupKey) {
+    if (!REG_SPEC) return false;
+    const fields = REG_SPEC.fields.filter((f) => f.group === groupKey);
+    if (!fields.length) return false;
+    return fields.every((f) => {
+      if (f.source !== "derived") return false;
+      const el = this.input(f.name);
+      const current = (el && el.value || "").trim().toLowerCase();
+      return current && current === String(this.fallback(f.name, f)).trim().toLowerCase();
+    });
+  }
+
+  toggleGroup(groupKey) {
+    const el = this.root.querySelector(`[data-group="${groupKey}"]`);
+    if (el) el.classList.toggle("nic-reg-collapsed");
+    if (this.missingEl) this.missingEl.textContent = this.missing().length
+      ? `Still empty — nic.bt.bt will reject the submission: ${this.missing().join(", ")}`
+      : "";
   }
 
   renderMissing() {
@@ -620,10 +662,24 @@ class RegistryForm {
     this.root.innerHTML = (REG_SPEC.groups || []).map(([key, label]) => {
       const fields = REG_SPEC.fields.filter((f) => f.group === key);
       if (!fields.length) return "";
-      return `<div class="nic-reg-group">
+      // Technical and billing contacts are usually the registrant, and four
+      // duplicate inputs on screen are four things an operator has to read to be
+      // sure there is nothing to do. Collapsed, with the reason stated, they cost
+      // one line -- and they still submit the customer's details either way.
+      const mirrors = ["technical", "billing"].includes(key);
+      return `<div class="nic-reg-group${mirrors ? " nic-reg-mirrorable" : ""}"
+                   data-group="${esc(key)}"
+                   data-mirrors="${mirrors ? "1" : "0"}">
                 <h4 class="nic-reg-group-title">${esc(label)}
                   <span class="nic-reg-group-count">${fields.length}</span>
                 </h4>
+                ${mirrors ? `<div class="nic-reg-mirror-note">
+                      <span class="nic-reg-mirror-text">Same as the registrant
+                        &mdash; already filled in, nothing to do.</span>
+                      <button type="button" class="btn-text-action"
+                              data-mirror-toggle="${esc(key)}">
+                        Make different</button>
+                    </div>` : ""}
                 <div class="nic-reg-grid">${fields.map((f) => this.row(f)).join("")}</div>
               </div>`;
     }).join("");
@@ -631,9 +687,28 @@ class RegistryForm {
     // An edit to one field can change fields copied from it, so re-derive the rest.
     this.root.addEventListener("input", (e) => this.onEdit(e));
     this.root.addEventListener("change", (e) => this.onEdit(e));
-    this.root.addEventListener("click", (e) => this.onMirrorClick(e));
+    this.root.addEventListener("click", (e) => {
+      if (this.onMirrorToggle(e)) return;
+      this.onMirrorClick(e);
+    });
     this.loaded = true;
     this.sync();
+    // Only now can we tell whether they actually match: before sync the boxes
+    // were empty and every group looked like it needed attention.
+    this.refreshMirrorGroups();
+  }
+
+  refreshMirrorGroups() {
+    this.root.querySelectorAll("[data-mirrors='1']").forEach((el) => {
+      const key = el.getAttribute("data-group");
+      const mirrors = this.groupMirrors(key);
+      // Once the operator has opened a group to change something, stop closing it
+      // again underneath them.
+      if (el.dataset.opened === "1") return;
+      el.classList.toggle("nic-reg-collapsed", mirrors);
+      const note = el.querySelector(".nic-reg-mirror-note");
+      if (note) note.hidden = !mirrors;
+    });
   }
 
   row(f) {
@@ -670,6 +745,17 @@ class RegistryForm {
 
   // The domain name is derived rather than typed, so clicking it unlocks it and
   // marks it an override. Deliberate, and reversible by Reset.
+  onMirrorToggle(e) {
+    const btn = e.target.closest("[data-mirror-toggle]");
+    if (!btn) return false;
+    const el = this.root.querySelector(`[data-group="${btn.getAttribute("data-mirror-toggle")}"]`);
+    if (el) el.dataset.opened = "1";
+    this.toggleGroup(btn.getAttribute("data-mirror-toggle"));
+    const note = el && el.querySelector(".nic-reg-mirror-note");
+    if (note) note.hidden = true;
+    return true;
+  }
+
   onMirrorClick(e) {
     const el = e.target;
     if (!el || !el.classList || !el.classList.contains("nic-reg-mirror")) return;

@@ -1681,3 +1681,26 @@ select.custom-select:focus {
   max-height: 320px;
   overflow: auto;
 }
+
+/* nic.bt.bt: the technical and billing contacts are usually just the registrant.
+   Four duplicate inputs on screen are four things to read to be sure there is
+   nothing to do; collapsed, with the reason stated, they cost one line. They
+   still submit the customer's details either way. */
+.nic-reg-mirror-note {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 2px 0 10px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: rgba(16, 185, 129, 0.08);
+  border: 1px solid rgba(16, 185, 129, 0.25);
+}
+.nic-reg-mirror-text {
+  font-size: 12px;
+  color: #6ee7b7;
+}
+.nic-reg-collapsed .nic-reg-grid {
+  display: none;
+}
