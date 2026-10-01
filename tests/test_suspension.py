@@ -15,11 +15,14 @@ decide() is pure, so none of this needs a server. Run with:
     ./venv/bin/python -m unittest discover -s tests -v
 """
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import suspension
 from suspension import (
     SKIP_ACTIVE, SKIP_ALREADY_BILLING, SKIP_NO_MATCH, SKIP_OTHER_REASON,
     SUSPEND, RunReport, SuspensionError, decide, execute, extract_domains,
@@ -350,3 +353,119 @@ class TestAuditWriteIsReportedHonestly(unittest.TestCase):
         chown = [ln for ln in dockerfile.splitlines() if "chown -R" in ln]
         self.assertTrue(any("/app/suspension" in ln for ln in chown),
                         "and never gives it to the user the job runs as")
+
+
+class TestTheHeartbeat(unittest.TestCase):
+    """
+    A run that fails writes no audit record, which is correct -- the audit log
+    holds decisions and inventing an entry with none would mislead. But it left
+    one situation indistinguishable from another: a job that did not run, and a
+    job that ran and failed. Both read as silence.
+
+    That hides the common case. A container down at 02:17, a host rebooting, a
+    crash on an import, an expired credential -- none leave a trace, so all of
+    them present as "no news", and the dashboard could only warn that the list
+    might be out of date: true of all of them, and actionable for none.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.path = Path(self.tmp.name) / "heartbeat.json"
+        p = patch.object(suspension, "heartbeat_path", return_value=self.path)
+        p.start(); self.addCleanup(p.stop)
+
+    def test_a_good_run_is_recorded(self):
+        suspension.write_heartbeat(True, "completed", duration_seconds=61.5)
+        beat = suspension.read_heartbeat()
+        self.assertTrue(beat["ok"])
+        self.assertEqual(beat["detail"], "completed")
+        self.assertEqual(beat["duration_seconds"], 61.5)
+        self.assertTrue(beat["attempted_at"])
+
+    def test_a_failed_run_is_recorded_too(self):
+        suspension.write_heartbeat(False, "crashed: ValueError: no credentials")
+        beat = suspension.read_heartbeat()
+        self.assertFalse(beat["ok"])
+        self.assertIn("ValueError", beat["detail"])
+
+    def test_a_traceback_is_kept_but_trimmed(self):
+        """An unhandled exception deep in a library can be enormous, and this
+        file is read by the dashboard."""
+        suspension.write_heartbeat(False, "crashed", traceback_text="x" * 9000)
+        self.assertLessEqual(len(suspension.read_heartbeat()["traceback"]), 2000)
+
+    def test_no_heartbeat_reads_as_none_rather_than_raising(self):
+        self.assertIsNone(suspension.read_heartbeat())
+
+    def test_a_corrupt_heartbeat_reads_as_none(self):
+        """A truncated file must not take the dashboard down with it."""
+        self.path.write_text("{ this is not json")
+        self.assertIsNone(suspension.read_heartbeat())
+
+    def test_writing_it_never_raises(self):
+        with patch.object(suspension, "heartbeat_path",
+                          return_value=Path("/proc/nope/heartbeat.json")):
+            with self.assertLogs("suspension", level="ERROR"):
+                beat = suspension.write_heartbeat(True, "completed")
+        self.assertTrue(beat["ok"], "the value is still returned for logging")
+
+
+class TestTheJobRecordsEveryInvocation(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        root = Path(__file__).resolve().parent.parent
+        cls.script = (root / "scripts" / "suspend_expired.py").read_text()
+
+    def test_a_crash_is_caught_and_recorded(self):
+        """The case where leaving no trace is most costly: the job has died
+        silently and the only sign is a list that quietly stopped updating."""
+        self.assertIn("except Exception", self.script)
+        self.assertIn("write_heartbeat(False, detail", self.script)
+
+    def test_the_traceback_is_kept(self):
+        self.assertIn("traceback.format_exc()", self.script)
+
+    def test_a_clean_run_is_recorded_too(self):
+        self.assertIn("write_heartbeat(code == 0, detail", self.script)
+
+    def test_the_heartbeat_is_written_after_the_decisions(self):
+        """So a run that decided something is not reported as a failure just
+        because the heartbeat could not follow it."""
+        self.assertLess(self.script.index("code = run(args)"),
+                        self.script.index("write_heartbeat(code == 0"))
+
+    def test_the_argument_parsing_still_works_from_the_cli(self):
+        """Moved out of the job body, so --live and --only-panel must still land."""
+        self.assertIn('ap.add_argument("--live"', self.script)
+        self.assertIn("--only-panel", self.script)
+
+
+class TestTheDashboardSaysWhichSituationThisIs(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        root = Path(__file__).resolve().parent.parent
+        cls.js = (root / "static" / "js" / "app.js").read_text()
+
+    def _body(self):
+        from tests.test_dns_check import js_function
+        return js_function(self.js, "loadSuspensionReport")
+
+    def test_a_failed_run_is_named_as_such(self):
+        self.assertIn("THE JOB FAILED", self._body())
+
+    def test_a_job_that_never_ran_is_named_as_such(self):
+        self.assertIn("NOT RUNNING", self._body())
+
+    def test_the_old_wording_is_gone(self):
+        """'A failed run writes no record' is no longer true, and repeating it
+        would send someone looking for the wrong thing."""
+        self.assertNotIn("A failed run writes no record", self.js)
+
+    def test_the_traceback_is_shown(self):
+        self.assertIn("last_attempt_traceback", self._body())
+
+    def test_a_merely_old_list_is_still_called_stale(self):
+        """Not everything old is broken, and treating all of it as a failure is
+        how people learn to ignore warnings."""
+        self.assertIn("last successful run", self._body())

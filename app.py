@@ -1,6 +1,6 @@
 import secrets
 import logging
-from datetime import date
+from datetime import date, datetime as _dt
 from fastapi import FastAPI, HTTPException, Request, Depends, Header, Form, UploadFile, File
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -39,6 +39,7 @@ from dns_check import (
     FORWARD_KINDS, FORWARDED, check_domain, check_forwarding, lookup_records,
 )
 from suspension import (
+    read_heartbeat,
     SKIP_ALREADY_BILLING, SKIP_NO_MATCH, SKIP_OTHER_REASON, SUSPEND, latest_report,
 )
 from surrender import (
@@ -810,6 +811,36 @@ class SuspendRequest(BaseModel):
         return validate_username(v)
 
 
+def _heartbeat_fields() -> dict:
+    """
+    Every invocation writes one of these, so "the job did not run" and "the job
+    ran and failed" stop looking identical. Before, both showed as silence and
+    the banner could only warn that the list might be out of date -- true of
+    both, and actionable for neither.
+    """
+    beat = read_heartbeat() or {}
+    attempted_at = beat.get("attempted_at")
+    age = None
+    if attempted_at:
+        try:
+            attempt_dt = _dt.fromisoformat(attempted_at)
+            age = round((_dt.now(attempt_dt.tzinfo) - attempt_dt).total_seconds() / 3600.0, 1)
+        except (ValueError, TypeError):
+            age = None
+    return {
+        "last_attempt_at": attempted_at,
+        "last_attempt_age_hours": age,
+        "last_attempt_ok": bool(attempted_at) and bool(beat.get("ok")),
+        "last_attempt_detail": beat.get("detail", ""),
+        "last_attempt_traceback": beat.get("traceback", ""),
+        # True when nothing has even tried to refresh the list for a long time:
+        # a container that was down, or a host that was off at 02:17. That is a
+        # different problem from a job that ran and failed, and it needs a
+        # different thing done about it.
+        "no_attempt_since": bool(age is not None and age > 26),
+    }
+
+
 @app.get("/api/v1/suspension/report", dependencies=[Depends(require_api_token)])
 def suspension_report():
     """
@@ -818,10 +849,18 @@ def suspension_report():
     """
     rec = latest_report()
     if not rec:
+        # The heartbeat is reported here too, not only when a run got far enough
+        # to write an audit record. A job that crashes on every attempt never
+        # reaches that point, so without this the dashboard would say "no run
+        # recorded" and never mention that it is crashing.
         return {
             "available": False,
             "message": "No suspension run has been recorded yet. The scheduled job "
                        "has not completed, or BSCS was not reachable.",
+            "stale": False,
+            "age_hours": None,
+            "generated_at": None,
+            **_heartbeat_fields(),
         }
     counts = rec.get("counts", {})
     # Age the report. A run that failed (BSCS unreachable, VPN down) writes no
@@ -831,7 +870,6 @@ def suspension_report():
     age_hours = None
     if generated:
         try:
-            from datetime import datetime as _dt
             gen = _dt.fromisoformat(generated)
             if gen.tzinfo is None:
                 gen = gen.astimezone()
@@ -875,6 +913,7 @@ def suspension_report():
         "generated_at": generated,
         "age_hours": age_hours,
         "stale": bool(age_hours is not None and age_hours > 26),
+        **_heartbeat_fields(),
         "total_accounts": rec.get("total_accounts", 0),
         "bscs_complete": rec.get("bscs_complete", True),
         "bscs_note": rec.get("bscs_note", ""),

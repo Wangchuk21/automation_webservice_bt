@@ -12,6 +12,7 @@ import json
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -228,3 +229,85 @@ class SuspendAPITest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestTheReportCarriesTheHeartbeat(unittest.TestCase):
+    """
+    The report is what the dashboard reads, so a heartbeat the endpoint does not
+    surface is the same as no heartbeat at all.
+
+    This class exists because it caught a real bug: the endpoint raised
+    AttributeError on every request, so the whole suspension card 500'd, and the
+    full suite still passed -- nothing exercised this path.
+    """
+
+    def setUp(self):
+        from fastapi.testclient import TestClient
+        import app as app_module
+        self.client = TestClient(app_module.app)
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.path = Path(self.tmp.name) / "heartbeat.json"
+        p = patch.object(suspension_mod, "heartbeat_path", return_value=self.path)
+        p.start(); self.addCleanup(p.stop)
+
+    def _get(self):
+        # The endpoint is token-gated and the environment has a real token set,
+        # so send the configured one rather than a made-up string.
+        return self.client.get(
+            "/api/v1/suspension/report",
+            headers={"X-API-Token": settings.API_AUTH_TOKEN or "t"})
+
+    def test_the_endpoint_works_with_no_heartbeat_at_all(self):
+        """The first run on a fresh deployment. Must be 200, not 500."""
+        r = self._get()
+        self.assertEqual(r.status_code, 200, r.text[:200])
+        d = r.json()
+        self.assertIsNone(d.get("last_attempt_at"))
+        self.assertFalse(d.get("last_attempt_ok"))
+
+    def test_a_recent_good_attempt_is_reported_as_good(self):
+        from datetime import datetime, timezone
+        self.path.write_text(json.dumps({
+            "attempted_at": datetime.now(timezone.utc).isoformat(),
+            "ok": True, "detail": "completed"}))
+        d = self._get().json()
+        self.assertTrue(d["last_attempt_ok"])
+        self.assertFalse(d["no_attempt_since"])
+        self.assertEqual(d["last_attempt_detail"], "completed")
+
+    def test_a_recent_failed_attempt_is_reported_as_failed(self):
+        from datetime import datetime, timezone
+        self.path.write_text(json.dumps({
+            "attempted_at": datetime.now(timezone.utc).isoformat(),
+            "ok": False, "detail": "crashed: RuntimeError: boom",
+            "traceback": "Traceback...\nRuntimeError: boom"}))
+        d = self._get().json()
+        self.assertFalse(d["last_attempt_ok"])
+        self.assertIn("RuntimeError", d["last_attempt_detail"])
+        self.assertIn("RuntimeError", d["last_attempt_traceback"])
+
+    def test_no_attempt_in_a_long_time_is_called_out_separately(self):
+        """The case in the screenshot: the list is stale and nothing has tried to
+        refresh it, so the container or host is not up at 02:17. That is a
+        different problem from a job that ran and failed."""
+        from datetime import datetime, timedelta, timezone
+        self.path.write_text(json.dumps({
+            "attempted_at": (datetime.now(timezone.utc)
+                             - timedelta(hours=66)).isoformat(),
+            "ok": True, "detail": "completed"}))
+        d = self._get().json()
+        self.assertTrue(d["no_attempt_since"])
+        self.assertGreater(d["last_attempt_age_hours"], 26)
+
+    def test_the_age_is_computed_from_the_heartbeat_not_the_audit(self):
+        """They are different moments: the audit record is the last run that got
+        as far as deciding something."""
+        from datetime import datetime, timedelta, timezone
+        self.path.write_text(json.dumps({
+            "attempted_at": (datetime.now(timezone.utc)
+                             - timedelta(hours=5)).isoformat(),
+            "ok": False, "detail": "failed"}))
+        d = self._get().json()
+        self.assertGreater(d["last_attempt_age_hours"], 4.5)
+        self.assertLess(d["last_attempt_age_hours"], 6)

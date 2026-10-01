@@ -480,3 +480,68 @@ def write_audit(report: RunReport, execution: Dict[str, Any],
                      "(the dashboard will report no run recorded until this "
                      "is fixed)", target, e)
         return str(target), False
+
+
+# ---------------------------------------------------------------------------
+# Heartbeat
+#
+# A run that fails writes no audit record, because there are no decisions to
+# record. That was correct -- the audit log holds decisions, and inventing an
+# entry with none would be misleading -- but it left one real situation
+# indistinguishable from another: "the job did not run" and "the job ran and
+# failed" both look like silence, and the dashboard could only say the list may
+# be out of date.
+#
+# In practice that hides the common failure. A container that was down at 02:17,
+# a host that was rebooting, a crash on an import, a credential that expired --
+# none of them leave a trace, so all of them read as "no news".
+#
+# So every invocation now writes a heartbeat, whatever the outcome: when it was
+# invoked, how it ended, and the error if it ended badly. The audit log stays
+# exactly as it was -- decisions only.
+# ---------------------------------------------------------------------------
+
+def heartbeat_path() -> Path:
+    return Path(settings.SUSPENSION_AUDIT_LOG).expanduser().parent / "heartbeat.json"
+
+
+def write_heartbeat(ok: bool, detail: str = "", traceback_text: str = "",
+                    duration_seconds: Optional[float] = None) -> Dict[str, Any]:
+    """
+    Record that the job ran, and how it went. Never raises.
+
+    This is written on every invocation including the failing ones, and it is
+    written *after* the audit record, so a run that got as far as deciding
+    something is not marked as a failure just because the heartbeat could not be
+    written afterwards.
+    """
+    beat = {
+        "attempted_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "ok": bool(ok),
+        "detail": detail or "",
+        "duration_seconds": round(duration_seconds, 1) if duration_seconds else None,
+    }
+    if traceback_text:
+        # Trimmed: an unhandled exception in a deep library can be enormous, and
+        # this file is read by the dashboard.
+        beat["traceback"] = traceback_text[-2000:]
+    target = heartbeat_path()
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(beat, indent=1), encoding="utf-8")
+    except OSError as e:
+        logging.getLogger(__name__).error(
+            "Could not write the suspension heartbeat to %s: %s", target, e)
+    return beat
+
+
+def read_heartbeat() -> Optional[Dict[str, Any]]:
+    """The last invocation, whatever its outcome, or None if there has never been one."""
+    target = heartbeat_path()
+    if not target.exists():
+        return None
+    try:
+        data = json.loads(target.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else None
+    except (OSError, ValueError):
+        return None

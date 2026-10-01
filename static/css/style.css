@@ -1657,3 +1657,27 @@ select.custom-select:focus {
 .pc-skip {
   color: var(--text-muted);
 }
+
+/* The traceback from a crashed nightly run. Collapsed by default: it is the
+   evidence, not the headline, and it is long. */
+.suspension-trace {
+  margin-top: 8px;
+}
+.suspension-trace summary {
+  cursor: pointer;
+  color: #fcd34d;
+  font-size: 12px;
+}
+.suspension-trace pre {
+  margin-top: 8px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  border: 1px solid rgba(244, 63, 94, 0.35);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  white-space: pre-wrap;
+  max-height: 320px;
+  overflow: auto;
+}

@@ -71,12 +71,24 @@ confirmation and an audit record.
 ## The scheduled job
 
 ```
-02:17 Asia/Thimphu   provisioner container
+02:17 Asia/Thimphu   suspender container
   └─ scripts/suspend_expired.py
        ├─ reads BSCS for lapsed contracts          (network)
        ├─ matches names against accounts on BOTH panels
-       └─ writes ./suspension/audit.jsonl
+       ├─ writes ./suspension/audit.jsonl     decisions, only when it got some
+       └─ writes ./suspension/heartbeat.json  ALWAYS, whatever the outcome
             └── DETECT ONLY. Nothing is suspended automatically.
+
+  The two files answer different questions. The audit log holds decisions, so a
+  run that fails before deciding anything correctly writes nothing to it -- which
+  used to make "the job did not run" and "the job ran and failed" look identical.
+  The heartbeat is written on every invocation, including a crash, with the
+  traceback, so the dashboard can say which of the three it is:
+
+      stale         the list is merely old
+      THE JOB FAILED  it ran and crashed; the reason is attached
+      NOT RUNNING    nothing has tried for 26h+ — the container or host was
+                     not up at 02:17
 ```
 
 One worker, no `--workers`: the async handlers were converted to plain `def` so

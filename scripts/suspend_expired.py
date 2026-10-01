@@ -18,6 +18,8 @@ import argparse
 import logging
 import os
 import sys
+import traceback
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -27,6 +29,7 @@ from config import settings
 from provisioners.cpanel import CPanelProvisioner
 from provisioners.directadmin import DirectAdminProvisioner
 from suspension import (
+    write_heartbeat,
     SUSPEND, SuspensionError, decide, execute, lapsed_hosting_domains, write_audit,
 )
 
@@ -64,14 +67,14 @@ def build_provisioners():
     return cp, da
 
 
-def main():
+def run(args) -> int:
+    """The job itself. Returns an exit code; says nothing about how it started."""
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--live", action="store_true",
                     help="Actually suspend. Without this, only report.")
     ap.add_argument("--only-panel", choices=["cpanel", "directadmin"],
                     help="Limit enumeration to one panel (diagnostics).")
-    args = ap.parse_args()
     dry_run = not args.live
 
     if not settings.BSCS_ENABLED:
@@ -169,6 +172,51 @@ def main():
     for r in failed:
         logger.error("  FAILED %s/%s: %s", r["panel"], r["username"], r["message"])
     return 1 if failed else 0
+
+
+def main() -> int:
+    """
+    Invoke the job and record that it happened, whatever the outcome.
+
+    The audit log holds decisions, so a run that fails before deciding anything
+    correctly writes no audit record. That made two very different situations look
+    identical: a job that did not run, and a job that ran and failed. Both read
+    as silence, and the dashboard could only warn that the list might be out of
+    date -- which is true of both and actionable for neither.
+
+    So every invocation writes a heartbeat too. A crash is caught rather than
+    allowed to escape, because an unhandled exception is exactly the case where
+    leaving no trace is most costly: the nightly job has died silently and the
+    only sign is a list that quietly stopped updating.
+    """
+    started = time.monotonic()
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--live", action="store_true",
+                    help="Actually suspend. Without this, only report.")
+    ap.add_argument("--only-panel", choices=["cpanel", "directadmin"],
+                    help="Limit enumeration to one panel (diagnostics).")
+    args = ap.parse_args()
+
+    code = 2
+    detail = ""
+    try:
+        code = run(args)
+        detail = ("completed" if code == 0
+                  else "finished with failures" if code == 1 else "refused to run")
+    except Exception as e:  # noqa: BLE001 - the point is to record it, not to stop
+        detail = f"crashed: {type(e).__name__}: {e}"
+        logger.exception("The suspension job crashed and was not recorded in the "
+                         "audit log. This heartbeat is the only trace of it.")
+        write_heartbeat(False, detail, traceback_text=traceback.format_exc(),
+                        duration_seconds=time.monotonic() - started)
+        return 1
+
+    # Written after the run, so a job that got as far as deciding something is not
+    # reported as a failure just because the heartbeat could not follow it.
+    write_heartbeat(code == 0, detail,
+                    duration_seconds=time.monotonic() - started)
+    return code
 
 
 if __name__ == "__main__":

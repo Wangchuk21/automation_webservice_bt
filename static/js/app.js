@@ -216,11 +216,24 @@ async function loadSuspensionReport() {
 
     const age = d.age_hours;
     const doneCount = ((d.candidates_all) || []).filter((c) => c.live_suspended).length;
-    const staleNote = d.stale
-      ? ` <strong style="color:#fcd34d">⚠ STALE — last run was ${esc(age)}h ago. ` +
-        `A failed run writes no record, so this list may be out of date; check the ` +
-        `nightly job before acting.</strong>`
-      : (age !== null && age !== undefined ? ` (${esc(age)}h ago)` : "");
+    // Three different situations, and the old single "stale" flag could not tell
+    // them apart: the list is merely old, the job ran and failed, or nothing has
+    // even tried to run. Only the last two need a person, and they need
+    // different things done about them.
+    let staleNote = (age !== null && age !== undefined) ? ` (${esc(age)}h ago)` : "";
+    if (d.last_attempt_ok === false && d.last_attempt_detail) {
+      staleNote = ` <strong style="color:#fcd34d">⚠ THE JOB FAILED — last attempt `
+        + `${esc(d.last_attempt_age_hours)}h ago: ${esc(d.last_attempt_detail)}. `
+        + `Nothing was suspended; this list is unchanged since ${esc(age)}h ago.</strong>`;
+    } else if (d.no_attempt_since) {
+      staleNote = ` <strong style="color:#fcd34d">⚠ NOT RUNNING — nothing has `
+        + `tried to run this job in ${esc(d.last_attempt_age_hours)}h, so the nightly `
+        + `schedule is not reaching it. The container or the host is not up at `
+        + `02:17. This list is ${esc(age)}h old.</strong>`;
+    } else if (d.stale) {
+      staleNote = ` <strong style="color:#fcd34d">⚠ STALE — last successful run `
+        + `was ${esc(age)}h ago, so this list may be out of date.</strong>`;
+    }
 
     summary.innerHTML =
       `Last run <strong>${esc(d.generated_at)}</strong>${staleNote} · ` +
@@ -230,6 +243,10 @@ async function loadSuspensionReport() {
       ` · ${esc(d.already_suspended_billing)} already suspended for billing · ` +
       `${esc(d.suspended_other_reason)} suspended for other reasons (left alone) · ` +
       `${esc(d.no_match)} no billing match` +
+      (d.last_attempt_traceback && d.last_attempt_ok === false
+        ? `<details class="suspension-trace"><summary>Why the job failed</summary>`
+          + `<pre>${esc(d.last_attempt_traceback)}</pre></details>`
+        : "")
       (d.bscs_complete ? "" : ` <strong style="color:#fcd34d">· INCOMPLETE: ${esc(d.bscs_note)}</strong>`);
 
     renderSuspensionCandidates(d.candidates || [], d.candidates_all || []);
