@@ -203,39 +203,203 @@ class TestDirectAdminOutcomes(unittest.TestCase):
         self.assertEqual(out["status"], ssl_service.FAILED)
 
 
-class TestCpanelOutcomes(unittest.TestCase):
-    def test_a_queued_domain_is_a_success(self):
-        with patch.object(settings, "CPANEL_AUTOSSL_VERIFIED", True), \
-             patch("provisioners.cpanel.CPanelProvisioner") as prov, \
-             patch.object(settings.CPANEL, "sudo_password", "pw"):
-            prov.return_value.ssh.execute.return_value = (
-                0, '{"result":1,"metadata":{"result":[{"status":"queued"}]}}', "")
-            out = ssl_service.enable_cpanel("wank", "wank.bt")
-        self.assertEqual(out["status"], ssl_service.ISSUED)
+class TestCpanelAutoSsl(unittest.TestCase):
+    """
+    The calls are no longer guessed. They were read out of thimpchu's own
+    /usr/local/cpanel/Whostmgr/API/1/SSL.pm -- the same file ipv6_enable_account
+    came from -- which replaced a guess that would have reported a confident and
+    wrong reason when it failed.
 
-    def test_a_missing_plugin_is_reported_as_unavailable(self):
-        """Verified live: thimpchu has no AutoSSL plugin and no Let's Encrypt
-        provider RPM, so there is genuinely nothing to call."""
+    The operator's own description of the workflow ("log in with the credentials
+    and set Let's Encrypt") matches start_autossl_check_for_one_user, which runs
+    `autossl --user <name>`. Running it as root over WHM avoids needing the
+    customer's password, but not the preconditions, and each is checked and named.
+    """
+
+    def test_the_function_names_come_from_the_servers_own_api(self):
+        for name in ("get_autossl_providers", "set_autossl_provider",
+                     "start_autossl_check_for_one_user"):
+            self.assertIn(name, ssl_service.__doc__ + open(ssl_service.__file__).read())
+
+    def test_the_guard_is_on_by_default_now(self):
+        """They were read off the server, so the default is to use them. The
+        preconditions are checked at run time instead."""
+        self.assertTrue(settings.CPANEL_AUTOSSL_VERIFIED)
+
+    def test_the_guard_can_still_be_turned_off(self):
+        with patch.object(settings, "CPANEL_AUTOSSL_VERIFIED", False):
+            with patch("ssl_service.autossl_providers") as probe:
+                out = ssl_service.enable_cpanel("wank", "wank.bt")
+        probe.assert_not_called()
+        self.assertEqual(out["status"], ssl_service.UNSUPPORTED)
+        self.assertIn("not been confirmed", out["message"])
+
+    def test_missing_autossl_plugin_is_named(self):
         with patch.object(settings, "CPANEL_AUTOSSL_VERIFIED", True), \
-             patch("provisioners.cpanel.CPanelProvisioner") as prov, \
-             patch.object(settings.CPANEL, "sudo_password", "pw"):
-            prov.return_value.ssh.execute.return_value = (
-                1, "", "autossl: command not found")
+             patch("ssl_service.autossl_providers",
+                   return_value={"available": False, "providers": [], "enabled": []}):
             out = ssl_service.enable_cpanel("wank", "wank.bt")
         self.assertEqual(out["status"], ssl_service.UNSUPPORTED)
-        self.assertIn("Install", out["message"])
+        self.assertIn("not installed", out["message"])
 
-    def test_a_refusal_is_a_failure(self):
+    def test_installed_but_not_switched_on_is_a_different_fix(self):
+        """"Install AutoSSL" would be wrong advice here: it is installed."""
         with patch.object(settings, "CPANEL_AUTOSSL_VERIFIED", True), \
-             patch("provisioners.cpanel.CPanelProvisioner") as prov, \
-             patch.object(settings.CPANEL, "sudo_password", "pw"):
-            prov.return_value.ssh.execute.return_value = (
-                0, '{"result":0,"errorstatus":1,"errors":["domain not validated"]}', "")
+             patch("ssl_service.autossl_providers",
+                   return_value={"available": True, "providers": ["LetsEncrypt"],
+                                 "enabled": []}):
+            out = ssl_service.enable_cpanel("wank", "wank.bt")
+        self.assertEqual(out["status"], ssl_service.UNSUPPORTED)
+        self.assertIn("not switched on", out["message"])
+        self.assertNotIn("not installed", out["message"])
+
+    def test_an_unreadable_feature_list_is_unknown_not_a_refusal(self):
+        """Unknown and no are different answers, and guessing either is wrong:
+        stopping skips a certificate that could have been issued, proceeding hits
+        a per-account error that does not name the cause."""
+        with patch.object(settings, "CPANEL_AUTOSSL_VERIFIED", True), \
+             patch("ssl_service.autossl_providers",
+                   return_value={"available": True, "providers": ["LetsEncrypt"],
+                                 "enabled": ["LetsEncrypt"]}), \
+             patch("ssl_service.package_has_autossl", return_value=None):
+            out = ssl_service.enable_cpanel("wank", "wank.bt")
+        self.assertEqual(out["status"], ssl_service.FAILED)
+        self.assertIn("unknown", out["message"].lower())
+
+    def test_the_feature_check_reads_the_list_the_package_names(self):
+        """cPanel keeps this two hops deep: the package names a feature list and
+        AutoSSL has to be ticked there. Checking the package itself finds nothing
+        and would have concluded wrongly."""
+        src = Path(ssl_service.__file__).read_text()
+        i = src.index("def package_has_autossl(")
+        body = src[i:src.index("\ndef ", i + 10)]
+        self.assertIn("FEATURELIST", body)
+        self.assertIn("read_featurelist", body)
+
+    def test_the_provider_name_key_comes_from_the_servers_answer(self):
+        """I looked for 'name' and 'id', got an empty string, and concluded no
+        provider existed -- which was wrong. It is module_name."""
+        src = Path(ssl_service.__file__).read_text()
+        i = src.index("def autossl_providers(")
+        body = src[i:src.index("\ndef ", i + 10)]
+        self.assertIn("module_name", body)
+        self.assertNotIn('p.get("name")', body)
+
+    def test_no_letsencrypt_provider_is_named_separately(self):
+        with patch.object(settings, "CPANEL_AUTOSSL_VERIFIED", True), \
+             patch("ssl_service.autossl_providers",
+                   return_value={"available": True, "providers": ["CPANELSignup"],
+                                 "enabled": ["CPANELSignup"]}), \
+             patch("ssl_service.package_has_autossl", return_value=True):
+            out = ssl_service.enable_cpanel("wank", "wank.bt")
+        self.assertEqual(out["status"], ssl_service.UNSUPPORTED)
+        self.assertIn("CPANELSignup", out["message"])
+
+    def test_a_package_without_the_feature_is_named(self):
+        """start_autossl_check_for_one_user dies on this by name. Checking here
+        turns a per-account surprise into one thing to look at -- and on this
+        server none of the eight packages carry it, so installing the plugin
+        alone would still not be enough."""
+        with patch.object(settings, "CPANEL_AUTOSSL_VERIFIED", True), \
+             patch("ssl_service.autossl_providers",
+                   return_value={"available": True, "providers": ["LetsEncrypt"],
+                                 "enabled": ["LetsEncrypt"]}), \
+             patch("ssl_service.package_has_autossl", return_value=False):
+            out = ssl_service.enable_cpanel("wank", "wank.bt")
+        self.assertEqual(out["status"], ssl_service.UNSUPPORTED)
+        self.assertIn("package", out["message"].lower())
+        self.assertIn("AutoSSL feature", out["message"])
+
+    def _run_whm(self, responses):
+        """responses maps the function name to (rc, stdout)."""
+        calls = []
+
+        class FakeSSH:
+            def execute(self, cmd, stdin_data=None):
+                for fn, (rc, body) in responses.items():
+                    if f" {fn}" in cmd or cmd.endswith(fn):
+                        calls.append(fn)
+                        return rc, body, ""
+                return 1, "", ""
+
+        with patch.object(settings, "CPANEL_AUTOSSL_VERIFIED", True), \
+             patch("ssl_service.autossl_providers",
+                   return_value={"available": True, "providers": ["LetsEncrypt"]}), \
+             patch("ssl_service.package_has_autossl", return_value=True), \
+             patch("ssl_service._cpanel_ssh", return_value=FakeSSH()):
+            out = ssl_service.enable_cpanel("wank", "wank.bt")
+        return out, calls
+
+    def test_a_successful_run_enables_auto_ssl_then_starts_it(self):
+        ok = '{"metadata":{"result":1}}'
+        out, calls = self._run_whm({
+            "set_autossl_provider": (0, ok),
+            "start_autossl_check_for_one_user": (0, ok),
+        })
+        self.assertEqual(out["status"], ssl_service.ISSUED)
+        self.assertEqual(calls, ["set_autossl_provider",
+                                 "start_autossl_check_for_one_user"],
+                         "the server-wide switch must be set before the per-user run")
+        self.assertIn("renews it automatically", out["message"])
+
+    def test_it_passes_the_account_not_the_domain(self):
+        """The API takes an account name. Passing the domain would silently
+        match nothing, since no account is named after its own domain."""
+        seen = []
+
+        class FakeSSH:
+            def execute(self, cmd, stdin_data=None):
+                seen.append(cmd)
+                return 0, '{"metadata":{"result":1}}', ""
+
+        with patch.object(settings, "CPANEL_AUTOSSL_VERIFIED", True), \
+             patch("ssl_service.autossl_providers",
+                   return_value={"available": True, "providers": ["LetsEncrypt"]}), \
+             patch("ssl_service.package_has_autossl", return_value=True), \
+             patch("ssl_service._cpanel_ssh", return_value=FakeSSH()):
+            ssl_service.enable_cpanel("wank", "wank.bt")
+        run_call = [c for c in seen if "start_autossl_check" in c][0]
+        self.assertIn("user=wank", run_call)
+        self.assertNotIn("wank.bt", run_call)
+
+    def test_a_package_refusal_from_cpanel_is_reported_as_a_package_problem(self):
+        out, _ = self._run_whm({
+            "set_autossl_provider": (0, '{"metadata":{"result":1}}'),
+            "start_autossl_check_for_one_user": (
+                0, '{"metadata":{"result":0,"errors":["The user [wank] does not '
+                   'have the [AutoSSL] feature enabled"]}}'),
+        })
+        self.assertEqual(out["status"], ssl_service.UNSUPPORTED)
+        self.assertIn("package must include", out["message"])
+
+    def test_any_other_refusal_is_a_failure(self):
+        out, _ = self._run_whm({
+            "set_autossl_provider": (0, '{"metadata":{"result":1}}'),
+            "start_autossl_check_for_one_user": (
+                0, '{"metadata":{"result":0,"errors":["unknown error"]}}'),
+        })
+        self.assertEqual(out["status"], ssl_service.FAILED)
+
+    def test_a_ssh_executor_defaults_to_port_22_which_is_not_listening(self):
+        """CPanelProvisioner(host) defaults ssh_port to 22 and thimpchu does not
+        listen there, so the connection hangs to timeout rather than failing at
+        once. Every panel call here passes the configured port."""
+        src = Path(ssl_service.__file__).read_text()
+        i = src.index("def _cpanel_ssh(")
+        body = src[i:src.index("\ndef ", i + 10)]
+        self.assertIn("c.ssh_port", body)
+        self.assertNotIn("CPanelProvisioner(settings.CPANEL.host)", src)
+
+    def test_it_cannot_reach_cpanel_without_failing_the_account(self):
+        with patch.object(settings, "CPANEL_AUTOSSL_VERIFIED", True), \
+             patch("ssl_service.autossl_providers", side_effect=OSError("refused")):
             out = ssl_service.enable_cpanel("wank", "wank.bt")
         self.assertEqual(out["status"], ssl_service.FAILED)
 
-    def test_no_username_is_refused(self):
-        out = ssl_service.enable_cpanel("", "wank.bt")
+    def test_no_username_is_refused_before_anything_is_called(self):
+        with patch("provisioners.cpanel.CPanelProvisioner") as prov:
+            out = ssl_service.enable_cpanel("", "wank.bt")
+        prov.assert_not_called()
         self.assertEqual(out["status"], ssl_service.FAILED)
 
 
@@ -298,35 +462,6 @@ class TestTheDockerImageShipsTheModule(unittest.TestCase):
         root = Path(__file__).resolve().parent.parent
         dockerfile = (root / "Dockerfile").read_text()
         self.assertIn("ssl_service.py", dockerfile)
-
-
-class TestCpanelDoesNotGuess(unittest.TestCase):
-    """
-    AutoSSL is not installed on thimpchu, so the WHM function name could not be
-    read off the server the way ipv6_enable_account was. Calling a guessed name
-    would return a confident-looking "AutoSSL is not installed" and send whoever
-    reads it chasing the wrong problem, when the real issue is the guess.
-    """
-
-    def test_it_refuses_rather_than_calling_a_guessed_function(self):
-        # False is the point of this test: unverified is the default.
-        with patch.object(settings, "CPANEL_AUTOSSL_VERIFIED", False), \
-             patch("provisioners.cpanel.CPanelProvisioner") as prov:
-            out = ssl_service.enable_cpanel("wank", "wank.bt")
-        prov.assert_not_called()
-        self.assertEqual(out["status"], ssl_service.UNSUPPORTED)
-        self.assertIn("not been set up", out["message"])
-
-    def test_the_message_does_not_blame_auto_ssl_being_absent(self):
-        """It is absent, but that is not why nothing was attempted, and saying so
-        would point at the wrong fix."""
-        with patch.object(settings, "CPANEL_AUTOSSL_VERIFIED", False):
-            out = ssl_service.enable_cpanel("wank", "wank.bt")
-        self.assertNotIn("Install", out["message"])
-
-    def test_the_gate_is_still_true_by_default(self):
-        """Defaulting to a guess would ship it silently."""
-        self.assertFalse(settings.CPANEL_AUTOSSL_VERIFIED)
 
 
 class TestAnUnauthorisedRequestIsNotBlamedOnThePlatform(unittest.TestCase):

@@ -169,13 +169,14 @@ class Config:
     SSL_ENABLED: bool = os.getenv("SSL_ENABLED", "true").lower() in ("1", "true", "yes")
     SSL_REQUIRE_DNS_MAPPING: bool = os.getenv("SSL_REQUIRE_DNS_MAPPING", "true").lower() in ("1", "true", "yes")
 
-    # cPanel AutoSSL is not installed on thimpchu, so the exact WHM function name
-    # could not be read off the server the way ipv6_enable_account was. Rather
-    # than ship a guessed call that would report a plausible but wrong reason
-    # when it fails, the cPanel path refuses to guess and says so. Set this only
-    # after `whmapi1 --output=json autossl_queue_run` has been confirmed on the
-    # server and the real function name substituted in ssl_service.
-    CPANEL_AUTOSSL_VERIFIED: bool = os.getenv("CPANEL_AUTOSSL_VERIFIED", "false").lower() in ("1", "true", "yes")
+    # The AutoSSL calls are no longer guessed: they were read out of this
+    # server's own /usr/local/cpanel/Whostmgr/API/1/SSL.pm, the same source
+    # ipv6_enable_account came from. So this defaults on, and the path checks its
+    # real preconditions at run time instead -- AutoSSL installed, a Let's Encrypt
+    # provider available, and the account's package carrying the AutoSSL feature.
+    #
+    # Set false to make the cPanel path decline without touching WHM at all.
+    CPANEL_AUTOSSL_VERIFIED: bool = os.getenv("CPANEL_AUTOSSL_VERIFIED", "true").lower() in ("1", "true", "yes")
 
     # A Let's Encrypt order is synchronous and can take minutes end to end. The
     # first guess of 120s was hit on a domain that already held a certificate, so

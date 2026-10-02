@@ -17,15 +17,15 @@ confirmation and an audit record.
         │  app.py — 34 endpoints, all under /api/v1                     │
         │                                                               │
         │  ┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐  │
-        │  │ Provisioning   │ │ Domain service │ │ Billing        │     │
-        │  │ create account │ │ register on    │ │ surrender      │     │
-        │  │ IPv6 · SSL     │ │ nic.bt.bt      │ │ suspend        │     │
-        │  │ SFTP · DNS     │ │ DNS check      │ │ activate       │     │
+        │  │ Provisioning    │ │ Domain service  │ │ Billing         │  │
+        │  │ create account  │ │ register on     │ │ surrender       │  │
+        │  │ IPv6 · SSL      │ │ nic.bt.bt       │ │ suspend         │  │
+        │  │ SFTP · DNS      │ │ DNS check       │ │ activate        │  │
         │  └─────────────────┘ └─────────────────┘ └─────────────────┘  │
         │                                                               │
         │  ┌─────────────────────────────────────────────────┐          │
-        │  │ provisioners/   cpanel.py · directadmin.py     │           │
-        │  │ ssh_client.py (paramiko) · tls_config.py       │           │
+        │  │ provisioners/   cpanel.py · directadmin.py      │          │
+        │  │ ssh_client.py (paramiko) · tls_config.py        │          │
         │  └─────────────────────────────────────────────────┘          │
         │                                                               │
         │  activity · domain_service · suspension · surrender           │
@@ -33,29 +33,30 @@ confirmation and an audit record.
         └───────────────┬────────────────────────────────┬──────────────┘
                         │                                │
                         ▼                                ▼
-         ┌────────────────────────────┐                                             ┌────────────────────────────┐
-         │ thimpchu.druknet.bt       │                                             │ yongnay.druknet.bt        │
-         │ cPanel 138.0              │                                             │ DirectAdmin 1.711         │
-         │ 202.144.128.216           │                                             │ 202.144.128.131           │
-         │                           │                                             │                           │
-         │ SSH        :2020          │                                             │ API        :2222          │
-         │ WHM        :2083          │                                             │ SFTP       :22            │
-         │                           │                                             │                           │
-         │ AutoSSL NOT INSTALLED, so │                                             │ Let's Encrypt, per-domain │
-         │ the certificate step      │                                             │ acme_enabled, renewed by  │
-         │ declines here             │                                             │ DirectAdmin               │
-         └────────────────────────────┘                                             └────────────────────────────┘
+      ┌──────────────────────────────────┐                                          ┌──────────────────────────────────┐
+      │ thimpchu.druknet.bt              │                                          │ yongnay.druknet.bt               │
+      │ cPanel 138.0                     │                                          │ DirectAdmin 1.711                │
+      │ 202.144.128.216                  │                                          │ 202.144.128.131                  │
+      │                                  │                                          │                                  │
+      │ SSH     :2020                    │                                          │ API     :2222                    │
+      │ WHM     :2083                    │                                          │ SFTP    :22                      │
+      │                                  │                                          │                                  │
+      │ AutoSSL installed, with          │                                          │ Let's Encrypt, per-domain        │
+      │ Let's Encrypt — but no package   │                                          │ acme_enabled, renewed by         │
+      │ carries the AutoSSL feature, so  │                                          │ DirectAdmin                      │
+      │ it declines here                 │                                          │                                  │
+      └──────────────────────────────────┘                                          └──────────────────────────────────┘
 
      every one of these is reached over the network, and none is trusted:
      what they report is checked against DNS before a customer is told
 
      ┌────────────────────────┐  ┌────────────────────────┐  ┌────────────────────────┐  ┌────────────────────────┐
-     │ nic.bt.bt             │  │ BSCS                  │  │ SMTP                  │  │ Public DNS            │
-     │ national domain       │  │ billing, READ-ONLY    │  │ webmail11.bt.bt       │  │ asked two questions:  │
-     │ registry              │  │ 10.0.41.149           │  │ :465                  │  │                       │
-     │                       │  │ :8581                 │  │                       │  │ does this domain point│
-     │ 23 fields, a tick-box │  │                       │  │ welcome letter,       │  │ at its own server?    │
-     │ on the hosting form   │  │ lapsed contracts      │  │ forwarding, correction│  │ is it forwarded?      │
+     │ nic.bt.bt              │  │ BSCS                   │  │ SMTP                   │  │ Public DNS             │
+     │ national domain        │  │ billing, READ-ONLY     │  │ webmail11.bt.bt        │  │ asked two questions:   │
+     │ registry               │  │ 10.0.41.149            │  │ :465                   │  │                        │
+     │                        │  │ :8581                  │  │                        │  │ does this domain point │
+     │ 23 fields, a tick-box  │  │                        │  │ welcome letter,        │  │ at its own server?     │
+     │ on the hosting form    │  │ lapsed contracts       │  │ forwarding, correction │  │ is it forwarded?       │
      └────────────────────────┘  └────────────────────────┘  └────────────────────────┘  └────────────────────────┘
 
   ═══ durable records ═══  JSONL, append only, last line wins ═══
@@ -66,6 +67,7 @@ confirmation and an audit record.
   ./data/surrenders/audit.jsonl     terminations, with their evidence
   ./data/surrenders/                scanned surrender letters
   ./suspension/audit.jsonl          the nightly run's own decisions
+  ./suspension/heartbeat.json       every run, whatever the outcome
 ```
 
 ## The scheduled job
@@ -149,8 +151,11 @@ old code running. It always needs `--build`.
 
 ## Known state
 
-- cPanel AutoSSL is not installed on thimpchu, so the certificate step declines
-  there rather than guessing a function name. Everything else on cPanel works.
+- cPanel AutoSSL is installed on thimpchu and already holds a Let's Encrypt
+  account. The certificate step still declines, for one reason: a cPanel package
+  does not list features itself, it names a *feature list*, and AutoSSL is not
+  ticked in the "default" one every package points at. Tick it in WHM under
+  Packages, and the step will run. Everything else on cPanel works.
 - DirectAdmin's Let's Encrypt works with no licence; it is a per-domain switch,
   enabled before a certificate is requested.
 - This only covers **new** accounts. Accounts already on either panel are not
