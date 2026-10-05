@@ -785,11 +785,21 @@
         </div>
       </div>
 
-      <div class="surrender-warning">
-        <strong>This switches off a live customer website.</strong>
-        The nightly job only <em>detects</em> — nothing is suspended automatically,
-        because the match between a lapsed billing contract and a hosting account is
-        made by name and is not always reliable. Check the domain, then suspend.
+      <!-- Amber, not the rose used by the surrender card. This borrowed that
+           styling and the weight was wrong: surrender destroys a customer's data
+           for good, whereas suspension is per account, needs a check first, needs
+           confirming, and only a billing suspension can be lifted again. A box
+           styled like the worst thing in the app trains people to stop seeing it.
+
+           The wording also opened with "This", which has no clear antecedent in a
+           safety notice -- the card, the button or the nightly job could each be
+           meant, and the reader has to work out which action is being qualified. -->
+      <div class="notice notice-amber">
+        <strong>Suspending switches off a live customer website.</strong>
+        The nightly job only <em>detects</em> — it never suspends anything by
+        itself, because a lapsed billing contract is matched to a hosting account by
+        name, and that match is not always right. Check each account against its
+        domain before you suspend it.
       </div>
 
       <div id="suspension-summary" class="form-hint">Loading…</div>

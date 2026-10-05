@@ -1704,3 +1704,43 @@ select.custom-select:focus {
 .nic-reg-collapsed .nic-reg-grid {
   display: none;
 }
+
+/* A caution that still needs reading, but is not the same class of danger as the
+   surrender card. Amber keeps it visible without borrowing the rose used for
+   destroying a customer's data, which is a different thing entirely. */
+.notice {
+  padding: 11px 14px;
+  margin-bottom: 18px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.notice-amber {
+  background: rgba(251, 191, 36, 0.07);
+  border: 1px solid rgba(251, 191, 36, 0.30);
+  border-left: 3px solid #f59e0b;
+  color: #fde68a;
+}
+.notice-amber strong {
+  color: #fbbf24;
+}
+
+/* A caution that still needs reading, but is not the same class of danger as the
+   surrender card. Amber keeps it visible without borrowing the rose used for
+   destroying a customer's data, which is a different thing entirely. */
+.notice {
+  padding: 11px 14px;
+  margin-bottom: 18px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.notice-amber {
+  background: rgba(251, 191, 36, 0.07);
+  border: 1px solid rgba(251, 191, 36, 0.30);
+  border-left: 3px solid #f59e0b;
+  color: #fde68a;
+}
+.notice-amber strong {
+  color: #fbbf24;
+}

@@ -119,3 +119,73 @@ class TestTheDiagramIsStillTrue(unittest.TestCase):
         """The two that have actually cost time, and which look harmless."""
         self.assertIn("COPY", self.text, "the Dockerfile's explicit module list")
         self.assertIn("--build", self.text, "docker compose up without --build")
+
+
+class TestRiskLevelsLookDifferent(unittest.TestCase):
+    """
+    The suspension card borrowed `.surrender-warning`, which is the rose styling
+    used by the surrender card -- the one that destroys a customer's data for
+    good, with no way back.
+
+    That gave the two risk levels the same visual weight, and both appear on the
+    same page. A box styled like the worst thing in the app is a box people stop
+    seeing, and this one carries the instruction to check a domain before cutting
+    off a live website.
+
+    The message is kept, deliberately. Removing a safety warning because it looks
+    loud would be the wrong trade; the styling was what was wrong.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.html = (ROOT / "templates" / "index.html").read_text()
+        cls.css = (ROOT / "static" / "css" / "style.css").read_text()
+
+    def _card(self, marker):
+        i = self.html.index(marker)
+        j = self.html.index("</section>", i)
+        return self.html[i:j]
+
+    def test_the_surrender_card_keeps_the_rose_warning(self):
+        """It destroys customer data permanently. That genuinely deserves the
+        strongest styling in the app."""
+        card = self._card('id="surrender"')
+        self.assertIn('class="surrender-warning"', card)
+
+    def test_the_suspension_card_does_not_borrow_it(self):
+        card = self._card('id="suspension-review"')
+        self.assertNotIn('class="surrender-warning"', card,
+                         "suspension must not look like data destruction")
+
+    def test_it_still_warns_though(self):
+        """Quieter, not absent. The instruction to check the domain is the point
+        of the box."""
+        card = self._card('id="suspension-review"')
+        self.assertIn("live customer website", card)
+        self.assertIn("detects", card)
+
+    def test_the_notice_opens_without_an_unqualified_this(self):
+        """"This switches off a live customer website" -- the card, the button or
+        the nightly job could each be what "this" meant, and a safety notice is
+        the worst place to make the reader work it out."""
+        card = self._card('id="suspension-review"')
+        self.assertNotIn(">This ", card, "the antecedent of 'This' is never stated")
+        self.assertIn("Suspending switches off", card,
+                      "the warning must name the action it qualifies")
+
+    def test_amber_is_defined_and_distinct_from_the_rose(self):
+        self.assertIn(".notice-amber", self.css)
+        amber = self.css[self.css.index(".notice-amber"):][:400]
+        self.assertNotIn("244, 63, 94", amber,
+                         "the amber notice must not reuse the rose danger colour")
+
+    def test_the_detect_only_claim_is_still_true_of_the_code(self):
+        """The warning says the job never suspends by itself. If that ever
+        changes the box becomes a lie, so it is asserted against the crontab."""
+        crontab = (ROOT / "deploy" / "crontab").read_text()
+        command = [l for l in crontab.splitlines()
+                   if "suspend_expired" in l and not l.strip().startswith("#")]
+        self.assertTrue(command, "the nightly command is missing from the crontab")
+        self.assertNotIn("--live", command[0],
+                         "the warning claims nothing is suspended automatically, "
+                         "and --live would make that false")
