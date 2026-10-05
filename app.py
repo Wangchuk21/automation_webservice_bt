@@ -838,6 +838,16 @@ def _heartbeat_fields() -> dict:
         # different problem from a job that ran and failed, and it needs a
         # different thing done about it.
         "no_attempt_since": bool(age is not None and age > 26),
+        # And separately: there has never been an attempt at all, since the
+        # heartbeat was introduced.
+        #
+        # This is not the same as an old heartbeat and must not be folded into
+        # it. Every invocation writes one, so its complete absence is not missing
+        # information -- it is evidence that nothing has run. The first version
+        # derived "no attempt" only from an old timestamp, so with no file at all
+        # the flag was False and the card fell through to the vaguest of the three
+        # messages, which is precisely the case that needed naming.
+        "never_attempted": not attempted_at,
     }
 
 

@@ -225,6 +225,15 @@ async function loadSuspensionReport() {
       staleNote = ` <strong style="color:#fcd34d">⚠ THE JOB FAILED — last attempt `
         + `${esc(d.last_attempt_age_hours)}h ago: ${esc(d.last_attempt_detail)}. `
         + `Nothing was suspended; this list is unchanged since ${esc(age)}h ago.</strong>`;
+    } else if (d.never_attempted) {
+      // No heartbeat at all. Every run writes one, so this is not missing data --
+      // it is evidence that nothing has run since the check was introduced. The
+      // first version folded this into the stale branch, which meant the single
+      // most conclusive case got the vaguest message of the three.
+      staleNote = ` <strong style="color:#fcd34d">⚠ HAS NEVER RUN — there is `
+        + `no record of any attempt, so the nightly schedule is not reaching it `
+        + `at all. Check the suspender container is running and was up at 02:17. `
+        + `This list is ${esc(age)}h old and should not be acted on.</strong>`;
     } else if (d.no_attempt_since) {
       staleNote = ` <strong style="color:#fcd34d">⚠ NOT RUNNING — nothing has `
         + `tried to run this job in ${esc(d.last_attempt_age_hours)}h, so the nightly `

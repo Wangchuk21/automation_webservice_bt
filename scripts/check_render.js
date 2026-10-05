@@ -67,12 +67,16 @@ const failed = {
   last_attempt_at: "2026-10-01T14:37:38+06:00", last_attempt_age_hours: 0.1,
   last_attempt_ok: false, last_attempt_detail: "crashed: RuntimeError: boom",
   last_attempt_traceback: "Traceback...\nRuntimeError: boom",
-  no_attempt_since: false,
+  no_attempt_since: false, never_attempted: false,
   unmatched_contracts: [], activatable: [],
 };
 const notRunning = Object.assign({}, failed, {
   last_attempt_ok: true, last_attempt_detail: "completed",
   last_attempt_traceback: "", last_attempt_age_hours: 66.5, no_attempt_since: true,
+});
+const neverRan = Object.assign({}, failed, {
+  last_attempt_ok: false, last_attempt_detail: "", last_attempt_traceback: "",
+  last_attempt_age_hours: null, never_attempted: true, no_attempt_since: false,
 });
 const clean = Object.assign({}, failed, {
   last_attempt_ok: true, last_attempt_detail: "completed",
@@ -81,7 +85,7 @@ const clean = Object.assign({}, failed, {
 
 (async () => {
   for (const [label, payload] of [["failed", failed], ["not running", notRunning],
-                                 ["clean", clean]]) {
+                                 ["never run", neverRan], ["clean", clean]]) {
     for (const k of Object.keys(els)) delete els[k];
     els["suspension-summary"] = el("suspension-summary");
     els["suspension-summary"].innerHTML = "";
@@ -99,6 +103,7 @@ const clean = Object.assign({}, failed, {
       }
       console.log("  OK [" + label + "] " +
         (html.indexOf("<details") >= 0 ? "(traceback shown)" :
+         html.indexOf("HAS NEVER RUN") >= 0 ? "(never run)" :
          html.indexOf("NOT RUNNING") >= 0 ? "(not running)" : "(clean)"));
     } catch (e) {
       console.error("FAIL [" + label + "]: threw " + e.message);

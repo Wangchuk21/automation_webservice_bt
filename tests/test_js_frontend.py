@@ -191,3 +191,43 @@ class TestTheNicFormDoesNotInventWork(unittest.TestCase):
                       "a group with a field of its own must never claim to mirror")
         self.assertIn("fallback(f.name, f)", body,
                       "mirroring is judged against what it would be filled with")
+
+
+class TestTheBannerNamesEveryCase(unittest.TestCase):
+    """
+    Four situations, four different things to do, and the one I missed was the
+    case the screenshot caught: no heartbeat at all.
+
+    Every run writes a heartbeat, so its absence is evidence that nothing has run
+    -- not missing data. The first version derived "nothing has tried" only from an
+    old timestamp, so with no file the flag was False and the card fell through to
+    the vaguest of the three messages it was supposed to be distinguishing.
+    """
+
+    def setUp(self):
+        self.body = ""
+        src = JS.read_text()
+        i = src.index("async function loadSuspensionReport")
+        j = src.index("\nasync function ", i + 10)
+        self.body = src[i:j]
+
+    def test_a_crashed_run_is_named(self):
+        self.assertIn("THE JOB FAILED", self.body)
+
+    def test_a_never_run_job_is_named(self):
+        self.assertIn("never_attempted", self.body)
+        self.assertIn("HAS NEVER RUN", self.body)
+
+    def test_a_job_that_stopped_is_named(self):
+        self.assertIn("no_attempt_since", self.body)
+        self.assertIn("NOT RUNNING", self.body)
+
+    def test_a_merely_old_list_is_still_called_stale(self):
+        self.assertIn("last successful run", self.body)
+
+    def test_the_never_run_case_is_checked_before_the_stale_one(self):
+        """Otherwise the conclusive case is still swallowed by the vague one,
+        which is exactly the bug."""
+        self.assertLess(self.body.index("never_attempted"),
+                        self.body.index("d.stale)"),
+                        "the never-run case must be considered before falling back")

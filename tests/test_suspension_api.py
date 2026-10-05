@@ -311,3 +311,102 @@ class TestTheReportCarriesTheHeartbeat(unittest.TestCase):
         d = self._get().json()
         self.assertGreater(d["last_attempt_age_hours"], 4.5)
         self.assertLess(d["last_attempt_age_hours"], 6)
+
+
+class TestTheFourStatesOfTheNightlyJob(unittest.TestCase):
+    """
+    The banner has to tell a fresh install from a working job from a job that
+    crashed from a job that has never run at all.
+
+    The fourth was the one I missed. There is no heartbeat at all when the job has
+    never been invoked, and the first version derived "nothing has tried" only
+    from an old timestamp -- so with no file, the flag was False and the card fell
+    through to the vaguest of the three messages. That is the most conclusive case
+    there is: every invocation writes a heartbeat, so its absence is evidence
+    rather than missing data.
+    """
+
+    def setUp(self):
+        from fastapi.testclient import TestClient
+        import app as app_module
+        self.client = TestClient(app_module.app)
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.path = Path(self.tmp.name) / "heartbeat.json"
+        p = patch.object(suspension_mod, "heartbeat_path", return_value=self.path)
+        p.start(); self.addCleanup(p.stop)
+
+    def _report(self, **over):
+        from datetime import datetime, timedelta, timezone
+        beat = over.pop("heartbeat", None)
+        if beat is not None:
+            self.path.write_text(json.dumps(beat))
+        r = self.client.get("/api/v1/suspension/report",
+                            headers={"X-API-Token": settings.API_AUTH_TOKEN or "t"})
+        self.assertEqual(r.status_code, 200, r.text[:200])
+        return r.json()
+
+    def _write_audit_hours_ago(self, hours):
+        """A report as the job actually writes one, at a chosen age.
+
+        Mirrors the shape used by the staleness test above it: an empty decisions
+        list is not what latest_report sees in practice, and a fixture that does
+        not look like reality tests nothing useful.
+        """
+        from datetime import datetime, timedelta, timezone
+        gen = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+        log = Path(self.tmp.name) / "audit.jsonl"
+        log.write_text(json.dumps({
+            "generated_at": gen, "total_accounts": 1, "bscs_complete": True,
+            "bscs_note": "", "counts": {}, "unmatched_contracts": [],
+            "decisions": [{"panel": "cpanel", "username": "a", "domain": "a.bt",
+                           "action": "suspend", "contract": "", "reason": "",
+                           "current_state": "", "bscs_customer": ""}]}) + "\n")
+        patcher = patch.object(settings, "SUSPENSION_AUDIT_LOG", str(log))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_a_fresh_install_is_not_alarmed(self):
+        """No heartbeat and a recent report: the first run is simply pending."""
+        self._write_audit_hours_ago(1)
+        d = self._report()
+        self.assertTrue(d["never_attempted"])
+        self.assertFalse(d["no_attempt_since"])
+        self.assertFalse(d["stale"])
+
+    def test_no_heartbeat_and_a_stale_list_is_conclusive(self):
+        self._write_audit_hours_ago(163)
+        d = self._report()
+        self.assertTrue(d["never_attempted"])
+        self.assertTrue(d["stale"])
+        self.assertFalse(d["no_attempt_since"],
+                         "there is no old attempt to be 'since'")
+
+    def test_an_old_heartbeat_is_the_other_case(self):
+        from datetime import datetime, timedelta, timezone
+        self._write_audit_hours_ago(163)
+        d = self._report(heartbeat={
+            "attempted_at": (datetime.now(timezone.utc)
+                             - timedelta(hours=70)).isoformat(),
+            "ok": True, "detail": "completed"})
+        self.assertFalse(d["never_attempted"])
+        self.assertTrue(d["no_attempt_since"])
+
+    def test_a_recent_good_run_is_all_clear(self):
+        from datetime import datetime, timezone
+        self._write_audit_hours_ago(1)
+        d = self._report(heartbeat={
+            "attempted_at": datetime.now(timezone.utc).isoformat(),
+            "ok": True, "detail": "completed"})
+        self.assertFalse(d["never_attempted"])
+        self.assertFalse(d["no_attempt_since"])
+        self.assertFalse(d["stale"])
+
+    def test_a_recent_failed_run_is_reported_as_failed(self):
+        from datetime import datetime, timezone
+        self._write_audit_hours_ago(1)
+        d = self._report(heartbeat={
+            "attempted_at": datetime.now(timezone.utc).isoformat(),
+            "ok": False, "detail": "crashed: RuntimeError: boom"})
+        self.assertFalse(d["last_attempt_ok"])
+        self.assertIn("RuntimeError", d["last_attempt_detail"])
