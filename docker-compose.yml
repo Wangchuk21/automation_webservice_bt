@@ -134,6 +134,17 @@ services:
       # writes to, otherwise the dashboard reports "no run recorded" while the
       # job is writing records the web service cannot see.
       - suspension_audit:/app/suspension
+      # config.py looks for /app/.env and .env is excluded from the image, so
+      # without this mount the job reads nothing.
+      #
+      # The web service does not need it: compose injects these values into the
+      # container's own environment, and PID 1 inherits them. cron does not pass
+      # its environment to the jobs it runs, so the suspension job was launched
+      # with no BSCS_ENABLED at all -- exited on the first check, wrote no audit
+      # record, and the dashboard reported a stale list with no explanation. The
+      # file is mounted read-only and is the single source of truth for both
+      # services, so a setting cannot be right in one and wrong in the other.
+      - ./.env:/app/.env:ro
 
     # cron must start as root so it can drop privileges to run the job as
     # "provisioner" -- running cron unprivileged fails with "seteuid:

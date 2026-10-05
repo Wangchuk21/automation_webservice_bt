@@ -11,4 +11,20 @@
 # m  h dom mon dow  user       command
 # 17 past 2am, deliberately off the hour: other cron jobs on the host tend to
 # fire at :00, and this one makes several calls to a slow billing portal.
-17 2 * * * provisioner cd /app && /opt/venv/bin/python scripts/suspend_expired.py >> /proc/1/fd/1 2>&1
+#
+# The timezone is needed twice, and one setting cannot do both.
+#
+# cron runs jobs in its own environment, not the one PID 1 was started with, so
+# TZ=Asia/Thimphu from compose never reached the job: a `date` inside one
+# printed "Mon Oct 5 10:03:01 UTC 2026" while the container itself said 15:50 +06.
+#
+# CRON_TZ decides WHEN this fires -- and it is read by cron itself, so it cannot
+# be lost. Without it, "17 2" meant 02:17 UTC, which is 08:17 in Thimphu.
+#
+# TZ on the command decides what the job WRITES. Verified on this cron: CRON_TZ
+# set alone still gave a job `date` of 10:22 UTC. So scheduling correctly while
+# stamping records in UTC, and the audit trail would have mixed +06 from manual
+# runs with +00:00 from the nightly one -- the exact six-hour disagreement the
+# provisioner was previously fixed for.
+CRON_TZ=Asia/Thimphu
+17 2 * * * provisioner cd /app && TZ=Asia/Thimphu /opt/venv/bin/python scripts/suspend_expired.py >> /proc/1/fd/1 2>&1

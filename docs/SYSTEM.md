@@ -81,6 +81,18 @@ confirmation and an audit record.
        └─ writes ./suspension/heartbeat.json  ALWAYS, whatever the outcome
             └── DETECT ONLY. Nothing is suspended automatically.
 
+  Two settings decide the timezone and neither substitutes for the other.
+  CRON_TZ says when this fires; TZ on the command says what the job writes.
+  Verified on this cron: CRON_TZ alone still gave a job a UTC clock, so without
+  the second the schedule would be right while every timestamp in the audit trail
+  was UTC -- mixing with the +06:00 records that manual runs produce.
+
+  The .env file is mounted into this container. cron runs jobs in its own
+  environment rather than the one PID 1 inherited, and .env is excluded from the
+  image, so without the mount the job read no settings at all and exited on its
+  first check -- writing no record, which the dashboard could only report as a
+  stale list with no explanation.
+
   The two files answer different questions. The audit log holds decisions, so a
   run that fails before deciding anything correctly writes nothing to it -- which
   used to make "the job did not run" and "the job ran and failed" look identical.
