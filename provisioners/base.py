@@ -170,37 +170,41 @@ def sanitize_username(domain: str, max_length: int = 8) -> str:
 
 HANDOVER_TEXT_TEMPLATE = """Dear Customer,
 
-We are pleased to inform you that your domain is successfully registered. We have also successfully hosted your website. The credentials for the same are shared below. Please note that the domain and web hosting should be renewed every year from the date of registration. If you wish to discontinue the service, please submit a surrender letter to the Bhutan Telecom office before the next billing date.
+We are pleased to confirm that your domain {{ domain }} has been successfully registered and your website is now hosted with us. Your account details are provided below.
 
-Your account has been created with the following details:
+Account Details
 
-Username: {{ username }}
-Password: {{ password }}
+    Username: {{ username }}
+    Password: {{ password }}
+    Control Panel URL: {{ web_url if web_url.endswith('/') else web_url + '/' }}
 
-URL: {{ web_url if web_url.endswith('/') else web_url + '/' }}
-If you wish to use FTP, please use the following:
+FTP/SFTP Access (optional)
 
-Host: sftp://{{ domain }}/
-Port: {{ sftp_port }}
+    Host: sftp://{{ domain }}/
+    Port: {{ sftp_port }}
 
-Important Maintenance Notice:
+Renewal and Discontinuation
 
-To ensure the ongoing security and stability of your website, we strongly recommend that you:
+Your domain and web hosting must be renewed annually from the date of registration. If you wish to discontinue the service, please submit a surrender letter or email to the Bhutan Telecom office before your next billing date.
 
-Keep your website software updated. This includes the core application (e.g., WordPress, Joomla), all themes, and all plugins/extensions. Running outdated software is the most common cause of security breaches and service disruptions.
+Important Maintenance Notice
 
-Perform regular backups. We advise you to regularly back up your website files and database. This ensures you can quickly restore your site in case of any unforeseen issues.
+To keep your website secure and stable, we strongly recommend that you:
 
-Use strong, unique credentials. Please use the strong password provided and update it periodically. Avoid using the same password for your hosting account, CMS admin panel, and FTP/SFTP access.
+    Keep your software updated. This includes your core application (e.g., WordPress, Joomla), themes, and plugins or extensions. Outdated software is the most common cause of security breaches and service disruptions.
 
-Neglecting these practices may expose your site to security vulnerabilities, malware, and unexpected downtime. Please be advised that, in accordance with our Acceptable Use Policy and to protect our infrastructure and other customers, we reserve the right to suspend hosting services or remove compromised website content if a severe security breach is detected that poses an active threat.
+    Back up regularly. Save copies of your website files and database so you can quickly restore your site if anything goes wrong.
 
+    Use strong, unique passwords. Please change the password provided above after your first login, and update it periodically. Do not reuse the same password across your hosting account, CMS admin panel, and FTP/SFTP access.
 
-Thank you for choosing our service to meet your web hosting needs. Please don't hesitate to contact us at systems@bt.bt if you have any questions.
+Neglecting these practices may expose your site to security vulnerabilities, malware, and unexpected downtime. In accordance with our Acceptable Use Policy, and to protect our infrastructure and other customers, we reserve the right to suspend hosting services or remove compromised website content if a severe security breach is detected that poses an active threat.
+
+Thank you for choosing our web hosting services. If you have any questions, please contact us at systems@bt.bt.
 
 Regards,
 Bhutan Telecom Ltd.
 """
+
 
 
 HANDOVER_HTML_TEMPLATE = """<!DOCTYPE html>
@@ -339,6 +343,25 @@ HANDOVER_HTML_TEMPLATE = """<!DOCTYPE html>
       font-size: 13px;
       color: #64748b;
     }
+    .renewal-box {
+      margin: 22px 0;
+      padding: 16px 18px;
+      background: #eff6ff;
+      border: 1px solid #bfdbfe;
+      border-left: 4px solid #2563eb;
+      border-radius: 8px;
+    }
+    .renewal-title {
+      font-size: 14px;
+      font-weight: 700;
+      color: #1e3a8a;
+      margin-bottom: 8px;
+    }
+    .renewal-box p {
+      margin: 0;
+      font-size: 13.5px;
+      color: #334155;
+    }
     .footer strong {
       color: #1e293b;
     }
@@ -353,9 +376,9 @@ HANDOVER_HTML_TEMPLATE = """<!DOCTYPE html>
     <div class="content">
       <p>Dear Customer,</p>
       
-      <p>We are pleased to inform you that your domain is successfully registered. We have also successfully hosted your website. The credentials for the same are shared below. Please note that the domain and web hosting should be renewed every year from the date of registration. If you wish to discontinue the service, please submit a surrender letter to the Bhutan Telecom office before the next billing date.</p>
+      <p>We are pleased to confirm that your domain <strong>{{ domain }}</strong> has been successfully registered and your website is now hosted with us. Your account details are provided below.</p>
 
-      <p><strong>Your account has been created with the following details:</strong></p>
+      <div class="section-subtitle">Account Details</div>
 
       <div class="credentials-box">
         <div class="cred-row">
@@ -367,11 +390,11 @@ HANDOVER_HTML_TEMPLATE = """<!DOCTYPE html>
           <div class="cred-value"><code>{{ password }}</code></div>
         </div>
         <div class="cred-row" style="margin-top: 12px;">
-          <div class="cred-label">URL:</div>
+          <div class="cred-label">Control Panel URL:</div>
           <div class="cred-value"><a href="{{ web_url if web_url.endswith('/') else web_url + '/' }}" target="_blank">{{ web_url if web_url.endswith('/') else web_url + '/' }}</a></div>
         </div>
 
-        <div class="section-subtitle">If you wish to use FTP, please use the following:</div>
+        <div class="section-subtitle">FTP/SFTP Access (optional)</div>
         
         <div class="cred-row">
           <div class="cred-label">Host:</div>
@@ -383,20 +406,25 @@ HANDOVER_HTML_TEMPLATE = """<!DOCTYPE html>
         </div>
       </div>
 
+      <div class="renewal-box">
+        <div class="renewal-title">Renewal and Discontinuation</div>
+        <p>Your domain and web hosting must be renewed annually from the date of registration. If you wish to discontinue the service, please submit a surrender letter or email to the Bhutan Telecom office before your next billing date.</p>
+      </div>
+
       <div class="notice-box">
-        <div class="notice-title">Important Maintenance Notice:</div>
-        <p>To ensure the ongoing security and stability of your website, we strongly recommend that you:</p>
+        <div class="notice-title">Important Maintenance Notice</div>
+        <p>To keep your website secure and stable, we strongly recommend that you:</p>
         <ul>
-          <li><strong>Keep your website software updated.</strong> This includes the core application (e.g., WordPress, Joomla), all themes, and all plugins/extensions. Running outdated software is the most common cause of security breaches and service disruptions.</li>
-          <li><strong>Perform regular backups.</strong> We advise you to regularly back up your website files and database. This ensures you can quickly restore your site in case of any unforeseen issues.</li>
-          <li><strong>Use strong, unique credentials.</strong> Please use the strong password provided and update it periodically. Avoid using the same password for your hosting account, CMS admin panel, and FTP/SFTP access.</li>
+          <li><strong>Keep your software updated.</strong> This includes your core application (e.g., WordPress, Joomla), themes, and plugins or extensions. Outdated software is the most common cause of security breaches and service disruptions.</li>
+          <li><strong>Back up regularly.</strong> Save copies of your website files and database so you can quickly restore your site if anything goes wrong.</li>
+          <li><strong>Use strong, unique passwords.</strong> Please change the password provided above after your first login, and update it periodically. Do not reuse the same password across your hosting account, CMS admin panel, and FTP/SFTP access.</li>
         </ul>
         <div class="notice-disclaimer">
-          Neglecting these practices may expose your site to security vulnerabilities, malware, and unexpected downtime. Please be advised that, in accordance with our Acceptable Use Policy and to protect our infrastructure and other customers, we reserve the right to suspend hosting services or remove compromised website content if a severe security breach is detected that poses an active threat.
+          Neglecting these practices may expose your site to security vulnerabilities, malware, and unexpected downtime. In accordance with our Acceptable Use Policy, and to protect our infrastructure and other customers, we reserve the right to suspend hosting services or remove compromised website content if a severe security breach is detected that poses an active threat.
         </div>
       </div>
 
-      <p>Thank you for choosing our service to meet your web hosting needs. Please don't hesitate to contact us at <a href="mailto:systems@bt.bt" style="color: #0284c7; text-decoration: none;">systems@bt.bt</a> if you have any questions.</p>
+      <p>Thank you for choosing our web hosting services. If you have any questions, please contact us at <a href="mailto:systems@bt.bt" style="color: #0284c7; text-decoration: none;">systems@bt.bt</a>.</p>
     </div>
 
     <div class="footer">

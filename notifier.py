@@ -104,7 +104,10 @@ def send_customer_welcome_email(result: ProvisionerResult) -> Tuple[bool, str]:
 
     try:
         msg = MIMEMultipart("alternative")
-        msg["Subject"] = f"Domain Registration & Web Hosting Credentials - {result.domain}"
+        # The manager's wording, including the domain, so a customer with several
+        # services from BT can tell at a glance which account this is about.
+        msg["Subject"] = (f"Your Domain Registration and Web Hosting Details "
+                          f"- {result.domain}")
         msg["From"] = f"{settings.SMTP_FROM_NAME} <{settings.SMTP_FROM_EMAIL}>"
         msg["To"] = result.email
 
